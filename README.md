@@ -1,4 +1,4 @@
-# StockBar
+# Candlet
 
 macOS 菜单栏自选股小工具。自选列表在本机自己维护，行情数据来自长桥 OpenAPI，通过 `longbridge serve`（JSON-RPC over stdio）获取，价格走实时推送，不轮询。
 
@@ -22,7 +22,7 @@ longbridge check
 longbridge quote AAPL.US
 ```
 
-然后双击 `StockBar.xcodeproj`，按 ⌘R 运行。菜单栏会出现一个小蜡烛笑脸图标。
+然后双击 `Candlet.xcodeproj`，按 ⌘R 运行。菜单栏会出现一个小蜡烛笑脸图标。
 
 ## 管理自选
 
@@ -38,7 +38,7 @@ longbridge quote AAPL.US
 
 | 文件 | 作用 |
 | --- | --- |
-| `StockBarApp.swift` | 入口，`MenuBarExtra(.window)`，不显示 Dock 图标 |
+| `CandletApp.swift` | 入口，`MenuBarExtra(.window)`，不显示 Dock 图标 |
 | `Serve.swift` | actor，管理 `longbridge serve` 子进程，按 id 对应请求和响应，推送通过 `AsyncStream` 发出 |
 | `Store.swift` | `@Observable` 状态：本地自选的增删排序与保存、增量订阅、合并推送、断线后指数退避重连（未登录时不自动重试） |
 | `Models.swift` | JSON 类型、自选项与代码规范化、报价（自动选取盘前 / 盘中 / 盘后 / 夜盘中最新的一组） |
