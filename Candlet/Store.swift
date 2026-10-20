@@ -253,7 +253,7 @@ final class Store {   // 工程默认 MainActor 隔离，不用再显式标注
     private static func load() -> [Stock] {
         migrateFromStockBar()
         guard let data = UserDefaults.standard.data(forKey: "stocks"),
-              let stocks = try? JSONDecoder().decode([Stock].self, from: data) else { return Stock.defaults }
+              let stocks = try? JSONDecoder().decode([Stock].self, from: data) else { return [] }
         return stocks
     }
 

@@ -30,7 +30,7 @@ longbridge quote AAPL.US
   - 不带后缀时：字母视为美股，6 位数字视为 A 股（6、5、9 开头是沪市，其余是深市），其他数字视为港股。
   - 新加坡股票需要带 `.SG` 后缀。
 - 拖动行可以排序，右键可以删除。
-- 列表保存在本机 UserDefaults 里，和长桥 App 的自选互不影响。首次运行会预置一组示例股票，可以随意删改。
+- 列表保存在本机 UserDefaults 里，和长桥 App 的自选互不影响。首次运行时列表为空。
 
 > 已经关闭了 App Sandbox。沙盒里的 App 无法启动 `/opt/homebrew/bin` 下的程序，也读不到 `~/.longbridge` 里的登录 token。
 

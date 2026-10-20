@@ -109,18 +109,6 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
         let trimmed = text.drop { $0 == "0" }
         return "\(trimmed.isEmpty ? "0" : trimmed).HK"
     }
-
-    static let defaults: [Stock] = [
-        .init(symbol: "3355.HK", name: "飞速创新"),
-        .init(symbol: "588950.SH", name: "科创综指ETF"),
-        .init(symbol: "600660.SH", name: "福耀玻璃"),
-        .init(symbol: "DECK.US", name: "德克斯户外"),
-        .init(symbol: "IREN.US", name: "IREN"),
-        .init(symbol: "QQQ.US", name: "纳指100 ETF"),
-        .init(symbol: "SOXX.US", name: "半导体 ETF"),
-        .init(symbol: "FIG.US", name: "Figma"),
-        .init(symbol: "NBIS.US", name: "Nebius"),
-    ]
 }
 
 // MARK: - 报价
