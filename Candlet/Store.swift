@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 自选列表（存在本机）+ 行情状态。价格靠推送更新，不轮询。
 @Observable
-final class Store {   // 工程默认 MainActor 隔离，不用再显式标注
+final class Store {
     enum Status: Equatable {
         case connecting, live
         case offline(String, needsLogin: Bool)
@@ -261,8 +261,7 @@ final class Store {   // 工程默认 MainActor 隔离，不用再显式标注
         UserDefaults.standard.set(try? JSONEncoder().encode(stocks), forKey: "stocks")
     }
 
-    /// 改名前的 bundle id 是 local.stockbar.StockBar；首次以 Candlet 启动时把自选和涨跌配色搬过来。
-    /// 先于 WatchlistView 的 @AppStorage 读取执行（Store 在 App 初始化时创建）
+    /// 从改名前的 bundle id（local.stockbar.StockBar）迁移自选和涨跌配色
     private static func migrateFromStockBar() {
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: "stocks") == nil,

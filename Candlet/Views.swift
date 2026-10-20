@@ -34,7 +34,6 @@ struct WatchlistView: View {
         }
     }
 
-    // 标题栏：状态灯 + 添加 + 菜单，一行搞定
     private var header: some View {
         HStack(spacing: 10) {
             let (color, text) = statusLight
@@ -127,7 +126,7 @@ struct WatchlistView: View {
                 self.error = error.localizedDescription
             }
             checking = false
-            focused = true   // 校验期间输入框被禁用会丢焦点，方便连续添加
+            focused = true   // 校验期间输入框被禁用会丢焦点
         }
     }
 
@@ -152,7 +151,7 @@ struct WatchlistView: View {
                             Button("删除", role: .destructive) { store.remove(stock) }
                         }
                 }
-                .onMove(perform: store.move)   // 拖动排序
+                .onMove(perform: store.move)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -163,7 +162,7 @@ struct WatchlistView: View {
     }
 }
 
-/// 只放纯数据并自动合成 Equatable：某一只股票的推送不会让其他行跟着重算
+/// 纯数据 + Equatable：一只股票的推送不会让其他行重算
 struct StockRow: View, Equatable {
     let stock: Stock
     let quote: Quote?
@@ -215,7 +214,7 @@ struct StockRow: View, Equatable {
     }
 }
 
-/// 行的悬停高亮。单独做成修饰符，hover 状态就不会混进 StockRow 的 Equatable 比较
+/// 悬停高亮。单独成修饰符，hover 状态不进入 StockRow 的 Equatable 比较
 struct HoverHighlight: ViewModifier {
     @State private var hovering = false
 
@@ -230,8 +229,7 @@ struct HoverHighlight: ViewModifier {
 }
 
 /// 分时小走势：价格线 + 昨收虚线。
-/// 横轴按点的序号均匀排布（分时数据每分钟一个点），午休等休市时段不会画出一段斜线；
-/// 用 Canvas 直接画，比 Swift Charts 每次推送重新布局几百个 mark 轻得多。
+/// 横轴按点的序号排布（每分钟一个点），午休等休市时段不会画出斜线
 struct Sparkline: View {
     let points: [SparkPoint]
     let baseline: Double?

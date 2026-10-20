@@ -23,8 +23,8 @@ nonisolated struct Disconnected: LocalizedError {
 /// 一行一个 JSON-RPC 请求写进 stdin，从 stdout 按行读回响应（按 id 对应）和行情推送。
 actor Serve {
     enum Event: Sendable {
-        case push(JSON)        // quote.updated
-        case exited(Disconnected)    // 子进程退出，附带原因
+        case push(JSON)              // quote.updated
+        case exited(Disconnected)
     }
 
     nonisolated let events: AsyncStream<Event>

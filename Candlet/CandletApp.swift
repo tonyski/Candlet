@@ -9,7 +9,7 @@ struct CandletApp: App {
             WatchlistView()
                 .environment(store)
         } label: {
-            Image(.menuBarIcon)   // 模板图，自动适配深浅色菜单栏
+            Image(.menuBarIcon)
                 .accessibilityLabel("Candlet")
         }
         .menuBarExtraStyle(.window)

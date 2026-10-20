@@ -49,10 +49,10 @@ nonisolated enum JSON: Sendable, Codable {
         }
     }
 
-    /// 秒级时间戳或 ISO 8601 字符串
-    /// 请求 id；非整数或越界时返回 nil，而不是让 Int() 直接崩溃
+    /// 非整数或越界时返回 nil，避免 Int() 崩溃
     var int: Int? { double.flatMap { Int(exactly: $0) } }
 
+    /// 秒级时间戳或 ISO 8601 字符串
     var date: Date? {
         if let n = double { return Date(timeIntervalSince1970: n > 1e12 ? n / 1000 : n) }
         if let s = string { return try? Date(s, strategy: .iso8601) }
