@@ -190,15 +190,18 @@ struct StockRow: View, Equatable {
                 Sparkline(points: spark, baseline: quote?.baseline, color: direction.line)
                     .frame(width: 60, height: 22)
 
+                // 价格与胶囊内文字右侧留同样的内边距，两行数字的末位对齐
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(quote?.last.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--")
                         .font(.system(size: 12.5, weight: .semibold))
+                        .padding(.trailing, badgePadding)
                     Text(quote?.change.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always())) ?? "--")
                         .font(.system(size: 10.5, weight: .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .foregroundStyle(direction.text)
-                        .frame(width: 58, height: 16)
+                        .padding(.horizontal, badgePadding)
+                        .frame(width: 62, height: 16, alignment: .trailing)
                         .background(direction.fill, in: .rect(cornerRadius: 4))
                 }
                 .monospacedDigit()
@@ -209,6 +212,8 @@ struct StockRow: View, Equatable {
         .padding(.horizontal, 8)
         .accessibilityElement(children: .combine)
     }
+
+    private let badgePadding: CGFloat = 6
 
     /// 涨跌幅放在实心胶囊里，背后的壁纸再花也看得清
     private var direction: (line: Color, fill: Color, text: Color) {
