@@ -7,6 +7,8 @@ struct WatchlistView: View {
     @State private var checking = false
     @State private var input = ""
     @State private var error: String?
+    @State private var suggestions: [Stock] = []
+    @State private var highlighted = 0
     @FocusState private var focused: Bool
 
     private let rowHeight: CGFloat = 40
@@ -87,8 +89,10 @@ struct WatchlistView: View {
                     .controlSize(.small)
                     .focused($focused)
                     .disabled(checking)
-                    .onSubmit(submit)
+                    .onSubmit { submit(suggestions.indices.contains(highlighted) ? suggestions[highlighted].symbol : input) }
                     .onExitCommand(perform: closeAddField)
+                    .onKeyPress(.downArrow) { moveHighlight(1) }
+                    .onKeyPress(.upArrow) { moveHighlight(-1) }
                 if checking {
                     ProgressView().controlSize(.mini)
                 }
@@ -96,9 +100,41 @@ struct WatchlistView: View {
             if let error {
                 Text(error).font(.caption2).foregroundStyle(Color.quoteRed)
             }
+            ForEach(Array(suggestions.enumerated()), id: \.element.symbol) { index, stock in
+                suggestionRow(stock, highlighted: index == highlighted)
+                    .onHover { if $0 { highlighted = index } }
+                    .onTapGesture { submit(stock.symbol) }
+            }
         }
         .padding(.horizontal, margin)
         .padding(.bottom, 10)
+        .onAppear(perform: store.loadCatalog)
+        .task(id: "\(input)|\(store.catalogReady)") {
+            let found = await store.suggestions(for: input)
+            guard !Task.isCancelled else { return }
+            (suggestions, highlighted) = (found, 0)
+        }
+    }
+
+    private func suggestionRow(_ stock: Stock, highlighted: Bool) -> some View {
+        HStack {
+            Text(stock.name).lineLimit(1)
+            Spacer()
+            Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .font(.system(size: 11.5))
+        .padding(.horizontal, 6)
+        .frame(height: 22)
+        .background(highlighted ? Color.accentColor.opacity(0.18) : .clear, in: .rect(cornerRadius: 5))
+        .contentShape(.rect)
+    }
+
+    private func moveHighlight(_ step: Int) -> KeyPress.Result {
+        guard !suggestions.isEmpty else { return .ignored }
+        highlighted = (highlighted + step + suggestions.count) % suggestions.count
+        return .handled
     }
 
     private func openAddField() {
@@ -115,8 +151,8 @@ struct WatchlistView: View {
         focused = false
     }
 
-    private func submit() {
-        let text = input
+    /// 有建议时添加选中的那条，否则按输入的代码添加
+    private func submit(_ text: String) {
         guard !checking, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         checking = true
         Task {

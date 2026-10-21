@@ -28,6 +28,10 @@ final class Store {
     /// 每次 connect() 自增；被新连接取代的旧连接，失败时不再改状态
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRefresh = Date.distantPast
+    /// 搜索用的证券目录，首次打开添加框时加载；加载完成后界面据此刷新建议
+    private(set) var catalogReady = false
+    @ObservationIgnored private var catalog: [SearchEntry] = []
+    @ObservationIgnored private var catalogTask: Task<Void, Never>?
 
     /// 各市场常规时段都落在同一个 UTC 日内，用它判断分时是否跨日
     private static let utc: Calendar = {
@@ -84,6 +88,50 @@ final class Store {
         if !stocks.contains(where: { $0.symbol == symbol }) {
             stocks.append(Stock(symbol: symbol, name: name))
         }
+    }
+
+    /// 拉取 A 股、港股、美股、新加坡证券列表和 Binance USDT 交易对；长桥未连上时下次再试
+    func loadCatalog() {
+        guard catalog.isEmpty, catalogTask == nil else { return }
+        catalogTask = Task {
+            defer { catalogTask = nil }
+            guard status == .live else { return }
+            async let crypto = Binance.usdtPairs()
+            var entries: [SearchEntry] = []
+            for market in ["CN", "HK", "US", "SG"] {
+                guard let list = try? await serve.call("quote.security_list", ["market": .string(market)]) else { return }
+                entries += list.list().compactMap { item in
+                    guard let symbol = item["symbol"]?.string else { return nil }
+                    let name = [item["name_cn"], item["name_hk"], item["name_en"]].compactMap { $0?.string }.first { !$0.isEmpty }
+                    return SearchEntry(symbol: symbol, name: name ?? symbol, english: item["name_en"]?.string ?? "")
+                }
+            }
+            catalog = entries + (await crypto)
+            catalogReady = true
+        }
+    }
+
+    /// 模糊匹配建议，排除已在自选里的。在后台线程计算，输入框不卡
+    func suggestions(for input: String) async -> [Stock] {
+        let query = input.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty, catalogReady else { return [] }
+        return await Self.rank(catalog, query: query, excluding: Set(stocks.map(\.symbol)))
+    }
+
+    /// 同一档里名称和代码越短越靠前，窝轮、牛熊证等衍生品自然靠后；只保留最好的几条，不对全部匹配排序
+    @concurrent
+    private static func rank(_ catalog: [SearchEntry], query: String, excluding owned: Set<String>, limit: Int = 6) async -> [Stock] {
+        let matcher = SearchEntry.Query(query)
+        var best: [(rank: (Int, Int, Int), stock: Stock)] = []
+        for (index, entry) in catalog.enumerated() {
+            if index % 2000 == 0, Task.isCancelled { return [] }   // 继续输入时放弃这一轮
+            guard let score = entry.score(matcher), !owned.contains(entry.stock.symbol) else { continue }
+            let rank = (score, entry.stock.name.utf8.count, entry.stock.symbol.utf8.count)
+            guard best.count < limit || rank < best[best.count - 1].rank else { continue }
+            best.insert((rank, entry.stock), at: best.firstIndex { rank < $0.rank } ?? best.endIndex)
+            if best.count > limit { best.removeLast() }
+        }
+        return best.map(\.stock)
     }
 
     func remove(_ stock: Stock) {

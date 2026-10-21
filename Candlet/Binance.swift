@@ -68,6 +68,18 @@ final class Binance {
         }
     }
 
+    /// 所有 USDT 交易对，供搜索建议使用
+    static func usdtPairs() async -> [SearchEntry] {
+        guard let url = URL(string: rest + "ticker/price"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              case .array(let tickers)? = try? JSONDecoder().decode(JSON.self, from: data) else { return [] }
+        return tickers.compactMap { ticker in
+            guard let wire = ticker["symbol"]?.string, wire.hasSuffix("USDT"), wire.count > 4 else { return nil }
+            let base = String(wire.dropLast(4))
+            return SearchEntry(symbol: base + "/USDT", name: base)
+        }
+    }
+
     /// BTC/USDT → BTCUSDT
     private static func wire(_ symbol: String) -> String { symbol.replacing("/", with: "") }
 }

@@ -130,6 +130,54 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
     }
 }
 
+// MARK: - 搜索
+
+/// 证券列表里的一条。代码、名称预先转成小写字节，输入时只做数组比较，几万条也只要几毫秒
+nonisolated struct SearchEntry: Sendable {
+    let stock: Stock
+    private let code: [UInt8]
+    private let name: [UInt8]
+    private let english: [UInt8]
+    private let scalars: [Unicode.Scalar]
+
+    init(symbol: String, name: String, english: String = "") {
+        stock = Stock(symbol: symbol, name: name)
+        code = Array(stock.code.lowercased().utf8)
+        self.name = Array(name.lowercased().utf8)
+        self.english = Array(english.lowercased().utf8)
+        scalars = Array(name.lowercased().unicodeScalars)
+    }
+
+    /// 越小越靠前：代码相同 > 代码前缀 > 名称前缀 > 名称包含 > 名称按顺序包含这些字（福玻 → 福耀玻璃）
+    func score(_ query: Query) -> Int? {
+        let q = query.bytes
+        if code == q { return 0 }
+        if code.starts(with: q) { return 1 }
+        if name.starts(with: q) || english.starts(with: q) { return 2 }
+        if Self.contains(name, q) || Self.contains(english, q) { return 3 }
+        var next = 0
+        for scalar in scalars where scalar == query.scalars[next] {
+            next += 1
+            if next == query.scalars.count { return 4 }
+        }
+        return nil
+    }
+
+    struct Query {
+        let bytes: [UInt8]
+        let scalars: [Unicode.Scalar]
+        init(_ text: String) { (bytes, scalars) = (Array(text.utf8), Array(text.unicodeScalars)) }
+    }
+
+    private static func contains(_ text: [UInt8], _ part: [UInt8]) -> Bool {
+        guard let first = part.first, part.count <= text.count else { return false }
+        for i in 0...(text.count - part.count) where text[i] == first && text[i..<i + part.count].elementsEqual(part) {
+            return true
+        }
+        return false
+    }
+}
+
 // MARK: - 报价
 
 nonisolated struct Quote: Sendable, Equatable {
