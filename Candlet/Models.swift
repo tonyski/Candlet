@@ -123,49 +123,50 @@ nonisolated struct StockGroup: Identifiable, Equatable, Codable, Sendable {
 
 // MARK: - 搜索
 
-/// 证券目录里的一条，预先转成小写字节，匹配时只做数组比较
+/// 证券目录里的一条。代码、名称、英文名转成小写后存进同一块字节数组，几万条只占很少内存，匹配时只做字节比较
 nonisolated struct SearchEntry: Sendable {
     let stock: Stock
-    private let code: [UInt8]
-    private let name: [UInt8]
-    private let english: [UInt8]
-    private let scalars: [Unicode.Scalar]
+    private let text: [UInt8]          // 代码 \0 名称 \0 英文名
+    private let name: Range<Int>
 
     init(symbol: String, name: String, english: String = "") {
         stock = Stock(symbol: symbol, name: name)
-        code = Array(stock.code.lowercased().utf8)
-        self.name = Array(name.lowercased().utf8)
-        self.english = Array(english.lowercased().utf8)
-        scalars = Array(name.lowercased().unicodeScalars)
+        let code = Array(stock.code.lowercased().utf8)
+        let lowered = Array(name.lowercased().utf8)
+        let english = Array(english.lowercased().utf8)
+        text = code + [0] + lowered + [0] + (english == lowered ? [] : english)
+        self.name = code.count + 1 ..< code.count + 1 + lowered.count
     }
 
     /// 越小越靠前：代码相同 > 代码前缀 > 名称前缀 > 名称包含 > 名称按顺序包含这些字（福玻 → 福耀玻璃）
     func score(_ query: Query) -> Int? {
+        let code = text[..<(name.lowerBound - 1)], name = text[name], english = text[(self.name.upperBound + 1)...]
         let q = query.bytes
-        if code == q { return 0 }
+        if code.elementsEqual(q) { return 0 }
         if code.starts(with: q) { return 1 }
         if name.starts(with: q) || english.starts(with: q) { return 2 }
-        if Self.contains(name, q) || Self.contains(english, q) { return 3 }
-        var next = 0
-        for scalar in scalars where scalar == query.scalars[next] {
-            next += 1
-            if next == query.scalars.count { return 4 }
+        if Self.find(q, in: name) != nil || Self.find(q, in: english) != nil { return 3 }
+        // 逐字查找；UTF-8 里完整字符的字节只会从字符边界开始匹配
+        var rest = name
+        for character in query.characters {
+            guard let found = Self.find(character, in: rest) else { return nil }
+            rest = rest[(found + character.count)...]
         }
-        return nil
+        return 4
     }
 
     struct Query {
         let bytes: [UInt8]
-        let scalars: [Unicode.Scalar]
-        init(_ text: String) { (bytes, scalars) = (Array(text.utf8), Array(text.unicodeScalars)) }
+        let characters: [[UInt8]]
+        init(_ text: String) { (bytes, characters) = (Array(text.utf8), text.unicodeScalars.map { Array(String($0).utf8) }) }
     }
 
-    private static func contains(_ text: [UInt8], _ part: [UInt8]) -> Bool {
-        guard let first = part.first, part.count <= text.count else { return false }
-        for i in 0...(text.count - part.count) where text[i] == first && text[i..<i + part.count].elementsEqual(part) {
-            return true
+    private static func find(_ part: [UInt8], in text: ArraySlice<UInt8>) -> Int? {
+        guard let first = part.first, part.count <= text.count else { return nil }
+        for i in text.startIndex...(text.endIndex - part.count) where text[i] == first && text[i..<i + part.count].elementsEqual(part) {
+            return i
         }
-        return false
+        return nil
     }
 }
 

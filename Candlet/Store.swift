@@ -85,7 +85,8 @@ final class Store {
             for market in ["CN", "HK", "US", "SG"] {
                 guard let list = try? await serve.call("quote.security_list", ["market": .string(market)]) else { return }
                 entries += list.list().compactMap { item in
-                    guard let symbol = item["symbol"]?.string else { return nil }
+                    // 5 位港股代码是窝轮、牛熊证和人民币 / 美元柜台，搜索里用不到
+                    guard let symbol = item["symbol"]?.string, !(market == "HK" && symbol.count == 8) else { return nil }
                     let name = [item["name_cn"], item["name_hk"], item["name_en"]].compactMap { $0?.string }.first { !$0.isEmpty }
                     return SearchEntry(symbol: symbol, name: name ?? symbol, english: item["name_en"]?.string ?? "")
                 }
