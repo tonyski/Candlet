@@ -87,9 +87,12 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
     var isCrypto: Bool { Self.isCrypto(symbol) }
     static func isCrypto(_ symbol: String) -> Bool { symbol.contains("/") }
 
+    /// 市场后缀：HK / US / SH / SZ / SG
+    private var suffix: Substring? { symbol.split(separator: ".").last }
+
     var market: String? {
         if isCrypto { return "加密" }
-        return switch symbol.split(separator: ".").last {
+        return switch suffix {
         case "HK": "港股"
         case "US": "美股"
         case "SH": "沪市"
@@ -105,7 +108,7 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
     /// 分时图横轴的总点数：股票为常规时段每天的分钟数（每分钟一个点，不含午休）
     var sparkSlots: Int {
         if isCrypto { return Self.cryptoSlots }
-        return switch symbol.split(separator: ".").last {
+        return switch suffix {
         case "US": 390     // 9:30–16:00
         case "HK": 330     // 9:30–12:00, 13:00–16:00
         case "SG": 420     // 9:00–12:00, 13:00–17:00

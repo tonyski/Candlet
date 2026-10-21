@@ -14,6 +14,11 @@ final class Store {
     private(set) var sparks: [String: [SparkPoint]] = [:]
     /// 总股本，乘以最新价得到市值
     private(set) var shares: [String: Double] = [:]
+
+    func marketCap(for symbol: String) -> Double? {
+        guard let total = shares[symbol], let quote = quotes[symbol] else { return nil }
+        return total * quote.last
+    }
     /// 至少一个分组；旧版的单一列表迁移为第一个分组
     private(set) var groups: [StockGroup] = Store.load("watchlist").flatMap { $0.isEmpty ? nil : $0 }
         ?? [StockGroup(name: "自选", stocks: Store.load("stocks") ?? [])] {

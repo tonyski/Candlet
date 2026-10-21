@@ -208,7 +208,7 @@ struct WatchlistView: View {
                     StockRow(stock: stock, quote: store.quotes[stock.symbol],
                              spark: store.sparks[stock.symbol] ?? [], redUp: redUp,
                              stale: stock.isCrypto ? !store.cryptoLive : store.status != .live,
-                             marketCap: store.quotes[stock.symbol].flatMap { quote in store.shares[stock.symbol].map { $0 * quote.last } })
+                             marketCap: store.marketCap(for: stock.symbol))
                         .modifier(HoverHighlight())
                         .frame(height: rowHeight)
                         .listRowInsets(EdgeInsets())
