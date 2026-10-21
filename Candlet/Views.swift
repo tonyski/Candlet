@@ -187,7 +187,7 @@ struct StockRow: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
-                Sparkline(points: spark, baseline: quote?.baseline, color: direction.line)
+                Sparkline(points: spark, slots: stock.tradingMinutes, baseline: quote?.baseline, color: direction.line)
                     .frame(width: 56, height: 24)
 
                 Text(quote?.last.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--")
@@ -234,9 +234,10 @@ struct HoverHighlight: ViewModifier {
 }
 
 /// 分时小走势：价格线 + 昨收虚线。
-/// 横轴按点的序号排布（每分钟一个点），午休等休市时段不会画出斜线
+/// 横轴是全天的交易分钟数，每分钟一格：盘中只画到当前进度，午休不会画出斜线
 struct Sparkline: View {
     let points: [SparkPoint]
+    let slots: Int
     let baseline: Double?
     let color: Color
 
@@ -258,14 +259,14 @@ struct Sparkline: View {
                                    style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
                 }
 
-                let step = size.width / CGFloat(prices.count - 1)
+                let step = size.width / CGFloat(max(slots, prices.count) - 1)
                 var line = Path()
                 for (i, price) in prices.enumerated() {
                     let point = CGPoint(x: CGFloat(i) * step, y: y(price))
                     i == 0 ? line.move(to: point) : line.addLine(to: point)
                 }
                 var area = line
-                area.addLine(to: CGPoint(x: size.width, y: size.height))
+                area.addLine(to: CGPoint(x: CGFloat(prices.count - 1) * step, y: size.height))
                 area.addLine(to: CGPoint(x: 0, y: size.height))
                 area.closeSubpath()
                 context.fill(area, with: .linearGradient(Gradient(colors: [color.opacity(0.22), color.opacity(0)]),

@@ -95,6 +95,16 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
         }
     }
 
+    /// 常规时段每天的分钟数（分时数据每分钟一个点，不含午休），用作分时图横轴的总长度
+    var tradingMinutes: Int {
+        switch symbol.split(separator: ".").last {
+        case "US": 390     // 9:30–16:00
+        case "HK": 330     // 9:30–12:00, 13:00–16:00
+        case "SG": 420     // 9:00–12:00, 13:00–17:00
+        default: 240       // A 股 9:30–11:30, 13:00–15:00
+        }
+    }
+
     /// AAPL → AAPL.US，700 / 00700 → 700.HK，600660 → 600660.SH，000001 → 000001.SZ
     static func normalize(_ raw: String) -> String? {
         let text = raw.trimmingCharacters(in: .whitespaces).uppercased()
