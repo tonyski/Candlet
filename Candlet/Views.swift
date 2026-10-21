@@ -13,13 +13,13 @@ struct WatchlistView: View {
     @FocusState private var focused: Bool
     @AppStorage("group") private var groupID = ""
     @State private var naming: Naming?
-    @State private var groupName = ""
+    @State private var draftName = ""
     @FocusState private var nameFocused: Bool
     /// 也可能在系统设置里改，面板打开时重新读取
     @State private var launchAtLogin = LoginItem.isEnabled
 
-    /// 重命名时记下目标分组，保存时不依赖当前选中的是哪个
-    private enum Naming: Equatable { case new, rename(StockGroup.ID) }
+    /// 正在编辑的名字：新建分组、重命名分组（记下目标，不依赖当前选中的是哪个）、给股票改名
+    private enum Naming: Equatable { case new, rename(StockGroup.ID), stock(String) }
 
     /// 当前分组；记住的分组被删掉时回到第一个
     private var group: StockGroup { store.groups.first { $0.id.uuidString == groupID } ?? store.groups[0] }
@@ -46,6 +46,7 @@ struct WatchlistView: View {
             store.panelOpened()
             launchAtLogin = LoginItem.isEnabled
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in store.panelClosed() }
     }
 
     private var header: some View {
@@ -72,7 +73,15 @@ struct WatchlistView: View {
                 if case .offline(_, needsLogin: true) = store.status {
                     Button("登录长桥…", action: store.logIn)   // 只看币时不显示登录卡片，从这里登录
                 }
-                Button("重新连接", action: store.reconnect)
+                @Bindable var store = store
+                Picker("行情来源", selection: $store.source) {
+                    Text("自动（优先长桥）").tag(Store.Source.auto)
+                    Text("只用长桥").tag(Store.Source.longbridge)
+                    Text("只用免费行情").tag(Store.Source.free)
+                }
+                if store.source != .free {
+                    Button("重新连接", action: store.reconnect)
+                }
                 Toggle("登录时打开", isOn: Binding(get: { launchAtLogin }) {
                     LoginItem.set($0)
                     launchAtLogin = LoginItem.isEnabled
@@ -126,33 +135,48 @@ struct WatchlistView: View {
     private var nameTab: some View {
         // 无边框输入框的提示文字会跟随正文颜色，自己画一个浅色占位；它也撑起最小宽度
         ZStack(alignment: .leading) {
-            Text("分组名称").foregroundStyle(.tertiary).opacity(groupName.isEmpty ? 1 : 0)
-            TextField("分组名称", text: $groupName, prompt: Text(""))
+            Text("分组名称").foregroundStyle(.tertiary).opacity(draftName.isEmpty ? 1 : 0)
+            editingName(TextField("分组名称", text: $draftName, prompt: Text(""))
                 .textFieldStyle(.plain)
                 .foregroundStyle(.primary)
-                .fixedSize()
-                .focused($nameFocused)
-                .onAppear { nameFocused = true }
-                .onSubmit(commitGroupName)
-                .onExitCommand { naming = nil }
-                .onChange(of: nameFocused) { _, focused in if !focused { commitGroupName() } }
+                .fixedSize())
         }
         .groupTab(active: true)
         .id("naming")
     }
 
+    /// 股票改名也在行内：占位是原名，清空后保存即恢复原名
+    private func stockNameField(_ stock: Stock) -> some View {
+        editingName(TextField(stock.name, text: $draftName)
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small))
+            .padding(.horizontal, 8)
+            .frame(maxHeight: .infinity)
+    }
+
+    /// 打开即聚焦；回车或点别处保存，Esc 取消
+    private func editingName(_ field: some View) -> some View {
+        field
+            .focused($nameFocused)
+            .onAppear { nameFocused = true }
+            .onSubmit(commitName)
+            .onExitCommand { naming = nil }
+            .onChange(of: nameFocused) { _, focused in if !focused { commitName() } }
+    }
+
     private func startNaming(_ mode: Naming, _ name: String) {
         closeAddField()
-        groupName = name
+        draftName = name
         naming = mode
     }
 
-    private func commitGroupName() {
+    private func commitName() {
         guard naming != nil else { return }   // 回车保存后失焦还会再调用一次
-        let name = groupName.trimmingCharacters(in: .whitespaces)
+        let name = draftName.trimmingCharacters(in: .whitespaces)
         switch naming {
         case .new where !name.isEmpty: groupID = store.createGroup(name).uuidString
         case .rename(let id) where !name.isEmpty: store.renameGroup(id, to: name)
+        case .stock(let symbol): store.renameStock(symbol, to: name)
         default: break
         }
         naming = nil
@@ -199,15 +223,21 @@ struct WatchlistView: View {
         VStack(alignment: .leading, spacing: 8) {
             switch store.login {
             case .idle, .failed:
-                Text("登录长桥，查看股票行情")
+                Text("登录长桥，查看实时行情")
                     .font(.system(size: 12, weight: .semibold))
-                Text("需要开通 OpenAPI 的长桥账户，加密货币无需登录。")
+                Text(store.source == .auto ? "当前为免费延迟行情，需开通 OpenAPI 的长桥账户。"
+                                           : "需开通 OpenAPI 的长桥账户，加密货币无需登录。")
                     .foregroundStyle(.secondary)
                 if case .failed(let message) = store.login {
                     Text(message).foregroundStyle(Color.warning)
                 }
-                Button("在浏览器中登录", action: store.logIn)
-                    .buttonStyle(.borderedProminent)
+                HStack(spacing: 12) {
+                    Button("在浏览器中登录", action: store.logIn)
+                        .buttonStyle(.borderedProminent)
+                    // 没有长桥账户的用户，从这里关掉登录提示
+                    Button("只用免费行情") { store.source = .free }
+                        .buttonStyle(.link)
+                }
             case .waiting(let url):
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
@@ -230,10 +260,27 @@ struct WatchlistView: View {
         .padding(.bottom, 10)
     }
 
+    /// 用免费行情时标「延迟」，否则显示长桥的连接状态
+    @ViewBuilder
+    private var statusIcon: some View {
+        if store.usingFree, store.hasStocks {
+            Text("延迟")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.warning)
+                .padding(.horizontal, 5)
+                .frame(height: 16)
+                .background(Color.warning.opacity(0.12), in: .capsule)
+                .help(store.source == .free ? "免费延迟行情，来自腾讯、Yahoo"
+                                            : "长桥不可用，暂用免费延迟行情（腾讯、Yahoo）")
+        } else {
+            longbridgeStatus
+        }
+    }
+
     /// 只在异常时出现，靠形状而不只是颜色区分；绿点会和「红涨绿跌」里的跌混淆，正常连接时不显示。
     /// 只看加密货币时长桥的状态与用户无关，也不显示
     @ViewBuilder
-    private var statusIcon: some View {
+    private var longbridgeStatus: some View {
         switch store.status {
         case .live: EmptyView()
         case .connecting:
@@ -253,26 +300,18 @@ struct WatchlistView: View {
     }
 
     private var addField: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            searchField
-            // 没连上长桥时只有加密货币目录，说明一下为什么搜不到股票
-            if !input.isEmpty, !store.stocksSearchable, store.status != .live {
-                Text("连上长桥后可搜索股票")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+        searchField
+            .padding(.horizontal, margin)
+            .padding(.bottom, 10)
+            .onAppear(perform: store.loadCatalog)
+            .onChange(of: input) { _, text in
+                if let stock = suggestions.first(where: { $0.symbol == text }) { add(stock) }
             }
-        }
-        .padding(.horizontal, margin)
-        .padding(.bottom, 10)
-        .onAppear(perform: store.loadCatalog)
-        .onChange(of: input) { _, text in
-            if let stock = suggestions.first(where: { $0.symbol == text }) { add(stock) }
-        }
-        .task(id: "\(input)|\(store.catalogSize)|\(groupID)") {
-            let query = input
-            let found = await store.suggestions(for: query, in: group.id)
-            if !Task.isCancelled { (suggestions, suggestionsFor) = (found, query) }
-        }
+            .task(id: "\(input)|\(store.catalogSize)|\(groupID)") {
+                let query = input
+                let found = await store.suggestions(for: query, in: group.id)
+                if !Task.isCancelled { (suggestions, suggestionsFor) = (found, query) }
+            }
     }
 
     /// 回车添加第一条建议；建议还没跟上输入时不添加，免得加错
@@ -337,15 +376,21 @@ struct WatchlistView: View {
         } else {
             List {
                 ForEach(shown) { stock in
-                    StockRow(stock: stock, quote: store.quotes[stock.symbol],
-                             spark: store.sparks[stock.symbol] ?? [], redUp: redUp,
-                             stale: stock.isCrypto ? !store.cryptoLive : store.status != .live,
-                             marketCap: store.marketCap(for: stock.symbol))
-                        .modifier(HoverHighlight())
-                        .frame(height: rowHeight)
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .contextMenu { rowMenu(stock) }
+                    Group {
+                        if naming == .stock(stock.symbol) {
+                            stockNameField(stock)
+                        } else {
+                            StockRow(stock: stock, quote: store.quotes[stock.symbol],
+                                     spark: store.sparks[stock.symbol] ?? [], redUp: redUp,
+                                     stale: stock.isCrypto ? !store.cryptoLive : !store.stocksLive,
+                                     marketCap: store.marketCap(for: stock.symbol))
+                        }
+                    }
+                    .modifier(HoverHighlight())
+                    .frame(height: rowHeight)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .contextMenu { rowMenu(stock) }
                 }
                 .onMove { store.move(from: $0, to: $1, in: group.id) }
             }
@@ -368,6 +413,10 @@ struct WatchlistView: View {
                 }
             }
         }
+        Button("重命名…") { startNaming(.stock(stock.symbol), stock.displayName) }
+        if stock.alias != nil {
+            Button("恢复原名「\(stock.name)」") { store.renameStock(stock.symbol, to: "") }
+        }
         Button("删除", role: .destructive) { store.remove(stock, from: group.id) }
     }
 }
@@ -385,7 +434,7 @@ struct StockRow: View, Equatable {
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(stock.name)
+                Text(stock.displayName)
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
                 Text(stock.subtitle)
@@ -444,7 +493,8 @@ struct StockRow: View, Equatable {
         guard let time = quote?.latestExtended?.time ?? quote?.time, time > .distantPast else { return prefix + "暂无行情" }
         let shown = Calendar.current.isDateInToday(time) ? time.formatted(date: .omitted, time: .standard)
                                                          : time.formatted(.dateTime.month().day().hour().minute())
-        return "\(prefix)更新于 \(shown)"
+        let original = stock.alias == nil ? "" : "\n原名：\(stock.name)"
+        return "\(prefix)更新于 \(shown)\(original)"
     }
 
     /// 第二排文字（代码、市场、延长时段）统一用的灰色

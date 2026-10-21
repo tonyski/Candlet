@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 自选与行情状态：股票走长桥，加密货币走 Binance，都靠推送更新
+/// 自选与行情状态：股票走长桥（不可用时可退到免费延迟行情），加密货币走 Binance
 @Observable
 final class Store {
     enum Status: Equatable {
@@ -8,11 +8,30 @@ final class Store {
         case offline(String, needsLogin: Bool)
     }
 
+    /// 股票行情来源：自动时长桥断开或未登录就用免费行情，连上后切回长桥
+    enum Source: String { case auto, longbridge, free }
+
+    var source = Source(rawValue: UserDefaults.standard.string(forKey: "source") ?? "") ?? .auto {
+        didSet {
+            UserDefaults.standard.set(source.rawValue, forKey: "source")
+            if source == .free { disconnect() } else if oldValue == .free { reconnect() }
+            refreshFreeNow()
+        }
+    }
+
+    /// 正在用免费行情：手动选择，或自动模式下长桥不可用（刚启动连接中时不算）
+    var usingFree: Bool {
+        guard case .offline = status else { return source == .free }
+        return source != .longbridge
+    }
+    /// 股票价格是否在更新：长桥已连上，或免费行情最近一次拉取成功
+    var stocksLive: Bool { status == .live || (usingFree && freeLive) }
+
     private(set) var status: Status = .connecting
     private(set) var cryptoLive = false
     private(set) var quotes: [String: Quote] = [:]
     private(set) var sparks: [String: [SparkPoint]] = [:]
-    /// 总股本，乘以最新价得到市值
+    /// 总股本，乘以最新价得到市值；免费行情给的是总市值，反推成股本存进来
     private(set) var shares: [String: Double] = [:]
 
     func marketCap(for symbol: String) -> Double? {
@@ -24,7 +43,7 @@ final class Store {
         ?? [StockGroup(name: "自选", stocks: Store.load("stocks") ?? [])] {
         didSet {
             Self.save(groups, "watchlist")
-            if Set(stocks.map(\.symbol)) != Set(oldValue.flatMap(\.stocks).map(\.symbol)) { sync(); watchCrypto() }
+            if Set(stocks.map(\.symbol)) != Set(oldValue.flatMap(\.stocks).map(\.symbol)) { sync(); watchCrypto(); refreshFreeNow() }
         }
     }
     /// 所有分组的股票，用于订阅
@@ -39,6 +58,10 @@ final class Store {
     /// 每次 connect() 自增；被新连接取代的旧连接，失败时不再改状态
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRefresh = Date.distantPast
+    /// 免费行情没有推送，只在面板打开期间轮询
+    @ObservationIgnored private var panelVisible = false
+    @ObservationIgnored private var lastFreeSparks = Date.distantPast
+    private var freeLive = false
     /// 搜索用的证券目录，首次打开添加框时加载。币与股票分开加载，没连上长桥也能搜币
     private var stockCatalog: [SearchEntry] = []
     private var cryptoCatalog: [SearchEntry] = []
@@ -57,6 +80,7 @@ final class Store {
         return calendar
     }()
 
+    private static let notUsingLongbridge = Status.offline("未使用长桥", needsLogin: false)
     private static let minRetryDelay = Duration.seconds(5)
     private static let maxRetryDelay = Duration.seconds(300)
 
@@ -72,7 +96,14 @@ final class Store {
         binance.onQuote = { [weak self] in self?.applyCrypto($0, $1) }
         binance.onLive = { [weak self] in self?.cryptoLive = $0 }
         watchCrypto()
+        if source == .free { status = Self.notUsingLongbridge }
         Task { await connect() }
+        Task {
+            while true {
+                if usingFree, panelVisible { await refreshFree() }
+                try? await Task.sleep(for: .seconds(10))
+            }
+        }
     }
 
     private var stockSymbols: Set<String> { Set(stocks.map(\.symbol).filter { !Stock.isCrypto($0) }) }
@@ -80,9 +111,23 @@ final class Store {
 
     // MARK: - 编辑自选
 
-    /// 建议都来自证券目录，无需再校验
+    /// 建议都来自证券目录，无需再校验；其他分组里改过名的，沿用那个名字
     func add(_ stock: Stock, to group: StockGroup.ID) {
+        var stock = stock
+        stock.alias = stock.alias ?? stocks.first { $0.symbol == stock.symbol }?.alias
         update(group) { if !$0.stocks.contains(where: { $0.symbol == stock.symbol }) { $0.stocks.append(stock) } }
+    }
+
+    /// 同一只股票在所有分组里一起改名；空名称或与原名相同时恢复原名
+    func renameStock(_ symbol: String, to name: String) {
+        var updated = groups   // 改完一次性写回，只存盘一次
+        for g in updated.indices {
+            for s in updated[g].stocks.indices where updated[g].stocks[s].symbol == symbol {
+                let original = updated[g].stocks[s].name
+                updated[g].stocks[s].alias = name.isEmpty || name == original ? nil : name
+            }
+        }
+        groups = updated
     }
 
     /// Binance USDT 交易对随时可加载；A 股、港股、美股、新加坡证券列表要等长桥连上，连上后自动补上。失败的部分下次再试
@@ -115,9 +160,15 @@ final class Store {
     /// 搜索建议，排除已在自选里的；在后台线程计算
     func suggestions(for input: String, in group: StockGroup.ID) async -> [Stock] {
         let query = input.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !query.isEmpty, catalogSize > 0 else { return [] }
-        let owned = groups.first { $0.id == group }?.stocks.map(\.symbol) ?? []
-        return await Self.rank([stockCatalog, cryptoCatalog], query: query, excluding: Set(owned))
+        guard !query.isEmpty else { return [] }
+        let owned = Set(groups.first { $0.id == group }?.stocks.map(\.symbol) ?? [])
+        let local = catalogSize > 0 ? await Self.rank([stockCatalog, cryptoCatalog], query: query, excluding: owned) : []
+        guard !stocksSearchable else { return local }
+        // 没有长桥的证券目录时，股票改用腾讯在线搜索；停顿一下再查，连续输入时不每个字都发请求
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !Task.isCancelled else { return [] }
+        let remote = await Free.search(query).filter { !owned.contains($0.symbol) }
+        return Array((remote + local).prefix(6))
     }
 
     /// 同档内名称、代码短者优先，衍生品自然靠后；只保留前几条，不全量排序
@@ -177,7 +228,8 @@ final class Store {
     @ObservationIgnored private var loginTask: Task<Void, Never>?
 
     /// 自选为空或含股票时才需要长桥；只看加密货币的用户不必被登录提示打扰
-    var needsLongbridge: Bool { stocks.isEmpty || !stockSymbols.isEmpty }
+    var needsLongbridge: Bool { source != .free && (stocks.isEmpty || hasStocks) }
+    var hasStocks: Bool { !stockSymbols.isEmpty }
 
     /// 授权在浏览器里完成，面板关掉也会继续等；成功后重连
     func logIn() {
@@ -205,6 +257,7 @@ final class Store {
     // MARK: - 连接
 
     func reconnect() {
+        guard source != .free else { return }
         retryTask?.cancel()
         retryTask = nil
         retryDelay = Self.minRetryDelay
@@ -218,7 +271,9 @@ final class Store {
 
     /// 面板打开时刷新昨收和分时（30 秒内不重复）；离线时立即重连
     func panelOpened() {
-        if case .offline(_, let needsLogin) = status, !needsLogin { reconnect() }
+        panelVisible = true
+        refreshFreeNow()
+        if case .offline(_, let needsLogin) = status, !needsLogin, source != .free { reconnect() }
         guard Date.now.timeIntervalSince(lastRefresh) > 30 else { return }
         lastRefresh = .now
         let (stocks, crypto) = (stockSymbols, cryptoSymbols)
@@ -228,7 +283,10 @@ final class Store {
         }
     }
 
+    func panelClosed() { panelVisible = false }
+
     private func connect() async {
+        guard source != .free else { return }
         generation += 1
         let current = generation
         status = .connecting
@@ -253,11 +311,12 @@ final class Store {
         let needsLogin = (error as? Disconnected)?.needsLogin ?? false
         subscribed = []
         status = .offline(error.localizedDescription, needsLogin: needsLogin)
+        refreshFreeNow()
         if needsLogin {
             retryTask?.cancel()
             retryTask = nil
         }
-        guard !needsLogin, retryTask == nil else { return }
+        guard !needsLogin, retryTask == nil, source != .free else { return }
         let delay = retryDelay
         retryDelay = min(retryDelay * 2, Self.maxRetryDelay)
         retryTask = Task {
@@ -357,6 +416,43 @@ final class Store {
                 } ?? []
                 if !points.isEmpty { sparks[symbol] = points }
             }
+        }
+    }
+
+    // MARK: - 免费行情
+
+    /// 手动选了免费行情：断开长桥，不再重试
+    private func disconnect() {
+        retryTask?.cancel()
+        retryTask = nil
+        generation += 1          // 进行中的连接作废
+        subscribed = []
+        status = Self.notUsingLongbridge
+        Task { await serve.stop() }
+    }
+
+    private func refreshFreeNow() {
+        guard usingFree, panelVisible else { return }
+        Task { await refreshFree() }
+    }
+
+    /// 报价每次都拉；分时每分钟一次，新加的股票立即补上
+    private func refreshFree() async {
+        let symbols = stockSymbols
+        guard !symbols.isEmpty else { return }
+        let found = await Free.quotes(symbols)
+        guard usingFree else { return }   // 期间连上了长桥，别用延迟数据覆盖
+        freeLive = !found.isEmpty
+        for (symbol, snapshot) in found {
+            quotes[symbol] = snapshot.quote
+            if let cap = snapshot.marketCap { shares[symbol] = cap / snapshot.quote.last }
+        }
+        let due = Date.now.timeIntervalSince(lastFreeSparks) > 60
+        if due { lastFreeSparks = .now }
+        let wanted = due ? symbols : symbols.filter { sparks[$0] == nil }
+        await withTaskGroup { group in
+            for symbol in wanted { group.addTask { (symbol, await Free.sparks(symbol)) } }
+            for await (symbol, points) in group where usingFree && !points.isEmpty { sparks[symbol] = points }
         }
     }
 

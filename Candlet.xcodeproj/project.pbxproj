@@ -59,6 +59,14 @@
 			);
 			sourceTree = "<group>";
 		};
+		5B0A00000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5B0A00000000000000000001 /* Candlet.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 		5B0A00000000000000000022 /* Vendor */ = {
 			isa = PBXGroup;
 			children = (
@@ -66,14 +74,6 @@
 				5B0A00000000000000000021 /* longbridge-LICENSE */,
 			);
 			path = Vendor;
-			sourceTree = "<group>";
-		};
-		5B0A00000000000000000005 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				5B0A00000000000000000001 /* Candlet.app */,
-			);
-			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

@@ -1,6 +1,6 @@
 # Candlet
 
-macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longbridge.com)，加密货币来自 [Binance](https://developers.binance.com/docs/binance-spot-api-docs)，都是实时推送。
+macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longbridge.com)，没有长桥账户时可用免费延迟行情；加密货币行情来自 [Binance](https://developers.binance.com/docs/binance-spot-api-docs)。
 
 ## 功能
 
@@ -9,7 +9,8 @@ macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longb
 - 分时小图，带昨收线
 - 点击涨跌幅切换为市值，悬停查看更新时间
 - 按代码或名称模糊搜索
-- 自选分组
+- 自选分组，可给股票改名
+- 没有长桥账户也能用免费延迟行情（腾讯、Yahoo）
 
 ## 安装
 
@@ -18,13 +19,14 @@ macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longb
 
 已内置[长桥 CLI](https://github.com/longbridge/longbridge-terminal)，无需另装。首次启动会开启「登录时打开」，可在 ⋯ 菜单里关闭。
 
-需要 macOS 27 及以上。股票行情需要开通 OpenAPI 的长桥账户，美股实时行情还需购买「LV1 实时行情（OpenAPI）」。只看加密货币无需登录。
+需要 macOS 27 及以上。股票实时行情需要开通 OpenAPI 的长桥账户，美股实时行情还需购买「LV1 实时行情（OpenAPI）」。没有长桥账户时，点登录卡片里的「只用免费行情」即可。
 
 ## 使用
 
 - **添加**：点 **+**，输入代码或名称（如「腾讯」「AAPL」「BTC」），选择建议或直接回车添加第一条。
-- **整理**：拖动排序；右键删除或移到其他分组。
+- **整理**：拖动排序；右键重命名、恢复原名、删除或移到其他分组。
 - **分组**：在 ⋯ 菜单里新建、重命名、删除；有两个以上分组时显示分组标签。
+- **行情来源**：在 ⋯ 菜单里选择。「自动」优先用长桥，长桥不可用时改用免费行情；用免费行情时标题旁显示「延迟」。
 - **更新**：有新版本时 ⋯ 旁会出现小圆点。
 
 自选只存在本机，与长桥 App 的自选无关。
@@ -33,6 +35,7 @@ macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longb
 
 - **登录失效**：面板里会出现登录卡片，重新授权即可。只看加密货币时，从 ⋯ 菜单的「登录长桥…」进入。
 - **在中国大陆登录美国账户**：授权页可能默认是 longbridge.cn，它不支持美国账户，请改用 longbridge.com。
+- **免费行情**：A 股、港股、美股来自腾讯，新加坡股来自 Yahoo。均为非官方接口，可能延迟或失效；面板打开时每 10 秒刷新，不含盘前盘后，也不能搜索新加坡股。
 - **登录信息在哪**：`~/.longbridge/openapi/`，与自行安装的长桥 CLI 共用。
 
 ## 开发
@@ -48,6 +51,7 @@ macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longb
 | `Store.swift` | 自选、订阅、搜索、重连、登录 |
 | `Serve.swift` | 内置 CLI 的子进程与 JSON-RPC |
 | `Binance.swift` | 加密货币行情 |
+| `Free.swift` | 免费延迟行情（腾讯、Yahoo） |
 | `Models.swift` | 数据模型 |
 | `Views.swift` | 界面 |
 | `Updater.swift` | 检查新版本 |

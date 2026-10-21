@@ -80,7 +80,11 @@ nonisolated extension JSON: ExpressibleByStringLiteral, ExpressibleByArrayLitera
 nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
     let symbol: String   // 700.HK / AAPL.US / 600660.SH / BTC/USDT
     var name: String
+    /// 用户起的名字；可选字段，旧数据里没有也能解码
+    var alias: String?
     var id: String { symbol }
+
+    var displayName: String { alias ?? name }
 
     var code: String { String(symbol[..<(symbol.lastIndex(of: ".") ?? symbol.endIndex)]) }
 
@@ -241,10 +245,15 @@ nonisolated struct Quote: Sendable, Equatable {
     /// 比常规时段更新的延长时段成交，用于第二行显示
     var latestExtended: Extended? { extended.flatMap { $0.time > time ? $0 : nil } }
 
+    /// 只有常规时段价格，用于免费行情
+    init(last: Double, prevClose: Double, time: Date) {
+        (self.last, self.prevClose, self.time, extended) = (last, prevClose, time, nil)
+    }
+
     /// 加密货币：相对 24 小时前的开盘价
     init?(last: Double?, open: Double?, time: Date?) {
         guard let last, let open, let time else { return nil }
-        (self.last, prevClose, self.time, extended) = (last, open, time, nil)
+        self.init(last: last, prevClose: open, time: time)
     }
 
     init?(snapshot j: JSON) {
