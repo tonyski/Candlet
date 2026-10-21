@@ -2,6 +2,8 @@ import SwiftUI
 
 struct WatchlistView: View {
     @Environment(Store.self) private var store
+    @Environment(Updater.self) private var updater
+    @Environment(\.openURL) private var openURL
     @AppStorage("redUp") private var redUp = true
     @State private var adding = false
     @State private var input = ""
@@ -62,6 +64,9 @@ struct WatchlistView: View {
                 adding ? closeAddField() : openAddField()
             }
             .help(addTitle)
+            if case .available(let version, _) = updater.state {
+                Circle().fill(.red).frame(width: 6, height: 6).help("有新版本 \(version)")
+            }
             Menu {
                 Button("新建分组…") { startNaming(.new, "") }
                 if store.groups.count > 1 {
@@ -73,6 +78,7 @@ struct WatchlistView: View {
                 Button("重新连接", action: store.reconnect)
                 Toggle("红涨绿跌", isOn: $redUp)
                 Divider()
+                updateItem
                 Button("退出") { NSApp.terminate(nil) }.keyboardShortcut("q")
             } label: {
                 Image(systemName: "ellipsis")
@@ -149,6 +155,17 @@ struct WatchlistView: View {
         default: break
         }
         naming = nil
+    }
+
+    @ViewBuilder
+    private var updateItem: some View {
+        switch updater.state {
+        case .idle: Button("检查更新", action: updater.check)
+        case .checking: Button("正在检查更新…") {}.disabled(true)
+        case .upToDate: Button("已是最新版本 \(updater.current)", action: updater.check)
+        case .failed: Button("检查更新失败，重试", action: updater.check)
+        case .available(let version, let url): Button("下载新版本 \(version)") { openURL(url) }
+        }
     }
 
     private var statusLight: (Color, String) {

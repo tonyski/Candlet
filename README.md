@@ -29,6 +29,8 @@ macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longb
 
 在 ⋯ 菜单里新建、重命名或删除分组，有两个以上分组时才显示分组切换。右键股票可移到其他分组。
 
+有新版本时 ⋯ 按钮旁会出现小红点，也可以在 ⋯ 菜单里手动「检查更新」。
+
 自选只保存在本机，与长桥 App 的自选无关。
 
 ## 常见问题
@@ -46,6 +48,7 @@ macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longb
 | `CandletApp.swift` | 入口 |
 | `Serve.swift` | `longbridge serve` 子进程与 JSON-RPC |
 | `Binance.swift` | 加密货币行情 |
+| `Updater.swift` | 检查 GitHub 上的新版本 |
 | `Store.swift` | 自选、订阅、搜索、重连 |
 | `Models.swift` | 数据模型 |
 | `Views.swift` | 界面 |
