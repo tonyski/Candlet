@@ -195,9 +195,9 @@ nonisolated struct Quote: Sendable, Equatable {
 
         var icon: String {
             switch self {
-            case .pre: "sunrise.fill"
-            case .post: "sunset.fill"
-            case .overnight: "moon.fill"
+            case .pre: "sunrise"
+            case .post: "sunset"
+            case .overnight: "moon"
             }
         }
     }
