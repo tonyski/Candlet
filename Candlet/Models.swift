@@ -181,7 +181,7 @@ nonisolated struct Quote: Sendable, Equatable {
     var extended: Extended?
 
     struct Extended: Sendable, Equatable {
-        var label: String          // 盘前 / 盘后 / 24h
+        var label: String          // 前 / 后 / 夜
         var last: Double
         var prevClose: Double
         var time: Date
@@ -204,7 +204,7 @@ nonisolated struct Quote: Sendable, Equatable {
         self.last = last
         prevClose = j["prev_close"]?.double ?? last
         time = j["timestamp"]?.date ?? .distantPast
-        extended = [("盘前", j["pre_market_quote"]), ("盘后", j["post_market_quote"]), ("24h", j["overnight_quote"] ?? j["over_night_quote"])]
+        extended = [("前", j["pre_market_quote"]), ("后", j["post_market_quote"]), ("夜", j["overnight_quote"] ?? j["over_night_quote"])]
             .compactMap { label, leg in
                 guard let leg, let price = leg["last_done"]?.double, let time = leg["timestamp"]?.date else { return nil }
                 return Extended(label: label, last: price, prevClose: leg["prev_close"]?.double ?? last, time: time)
@@ -236,9 +236,9 @@ nonisolated struct Quote: Sendable, Equatable {
     /// 推送里的交易时段；nil 为常规时段
     static func label(_ raw: String?) -> String? {
         switch raw?.lowercased() {
-        case let s? where s.hasPrefix("pre"): "盘前"
-        case let s? where s.hasPrefix("post"): "盘后"
-        case let s? where s.hasPrefix("over") || s.hasPrefix("night"): "24h"
+        case let s? where s.hasPrefix("pre"): "前"
+        case let s? where s.hasPrefix("post"): "后"
+        case let s? where s.hasPrefix("over") || s.hasPrefix("night"): "夜"
         default: nil
         }
     }

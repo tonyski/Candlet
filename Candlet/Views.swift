@@ -276,19 +276,21 @@ struct StockRow: View, Equatable {
                             .frame(width: 64, alignment: .trailing)
                         Badge(change: quote?.change, marketCap: marketCap, fill: direction.fill, text: direction.text)
                     }
-                    // 盘前 / 盘后 / 夜盘：参考富途，小字显示在第二行
+                    // 盘前 / 盘后 / 夜盘：参考富途，小字显示在第二行，宽度不超过上一行
                     if let extended = quote?.latestExtended {
                         HStack(spacing: 4) {
                             Text(Self.price(extended.last))
                             Text(Self.percent(extended.change)).foregroundStyle(color(extended.change))
                             Text(extended.label)
                                 .font(.system(size: 8.5, weight: .semibold))
-                                .padding(.horizontal, 3)
-                                .padding(.vertical, 1)
+                                .frame(width: 13, height: 13)
                                 .background(.secondary.opacity(0.2), in: .rect(cornerRadius: 3))
                         }
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: 134, alignment: .trailing)
                     }
                 }
             }
