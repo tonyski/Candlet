@@ -285,7 +285,7 @@ struct StockRow: View, Equatable {
                                 .font(.system(size: 8.5, weight: .medium))
                         }
                         .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)   // 参考富途：整行统一灰色，红绿只留给主行
+                        .foregroundStyle(.primary.opacity(0.6))   // 参考富途：整行统一灰色，红绿只留给主行
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .frame(maxWidth: 134, alignment: .trailing)
