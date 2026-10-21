@@ -132,8 +132,8 @@ struct WatchlistView: View {
                         .textInputCompletion(stock.symbol)
                     }
                 }
-            if !store.catalogReady {
-                ProgressView().controlSize(.mini)   // 证券目录加载中
+            if !input.isEmpty, !store.catalogReady {
+                ProgressView().controlSize(.mini)   // 已输入但证券目录还没加载完
             }
         }
         .padding(.horizontal, margin)
