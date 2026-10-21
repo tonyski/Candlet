@@ -280,12 +280,12 @@ struct StockRow: View, Equatable {
                     if let extended = quote?.latestExtended {
                         HStack(spacing: 4) {
                             Text(Self.price(extended.last))
-                            Text(Self.percent(extended.change)).foregroundStyle(color(extended.change))
+                            Text(Self.percent(extended.change))
                             Image(systemName: extended.session.icon)
                                 .font(.system(size: 8.5, weight: .medium))
                         }
                         .font(.system(size: 10.5))
-                        .foregroundStyle(.primary.opacity(0.7))
+                        .foregroundStyle(.secondary)   // 参考富途：整行统一灰色，红绿只留给主行
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .frame(maxWidth: 134, alignment: .trailing)
@@ -305,10 +305,6 @@ struct StockRow: View, Equatable {
 
     static func percent(_ value: Double) -> String {
         value.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always()))
-    }
-
-    private func color(_ change: Double) -> Color {
-        change == 0 ? .secondary : (change > 0) == redUp ? .quoteRed : .quoteGreen
     }
 
     /// 涨跌幅用实心胶囊，不受背后壁纸影响
