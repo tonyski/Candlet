@@ -47,16 +47,6 @@ final class Binance {
         }
     }
 
-    /// 校验交易对并取一份快照；不存在的交易对 Binance 返回 400，网络错误原样抛出
-    static func quote(_ symbol: String) async throws -> Quote {
-        let (data, response) = try await URLSession.shared.data(from: URL(string: rest + "ticker/24hr?symbol=\(wire(symbol))")!)
-        guard (response as? HTTPURLResponse)?.statusCode == 200,
-              let j = try? JSONDecoder().decode(JSON.self, from: data),
-              let quote = Quote(last: j["lastPrice"]?.double, open: j["openPrice"]?.double, time: j["closeTime"]?.date)
-        else { throw AppError("找不到 \(symbol)") }
-        return quote
-    }
-
     /// 最近 24 小时的 5 分钟 K 线收盘价
     static func sparks(_ symbol: String) async -> [SparkPoint] {
         guard let url = URL(string: rest + "klines?symbol=\(wire(symbol))&interval=5m&limit=\(Stock.cryptoSlots)"),

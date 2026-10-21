@@ -112,22 +112,6 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
         default: 240       // A 股 9:30–11:30, 13:00–15:00
         }
     }
-
-    /// AAPL → AAPL.US，700 / 00700 → 700.HK，600660 → 600660.SH，000001 → 000001.SZ，btc/usdt → BTC/USDT
-    static func normalize(_ raw: String) -> String? {
-        let text = raw.trimmingCharacters(in: .whitespaces).uppercased()
-        guard !text.isEmpty else { return nil }
-        if text.wholeMatch(of: /[A-Z0-9]{2,12}\/[A-Z0-9]{2,12}/) != nil { return text }
-        if let suffix = text.split(separator: ".").last, ["HK", "US", "SH", "SZ", "SG"].contains(suffix), text.contains(".") {
-            guard suffix == "HK" else { return text }
-            let code = text.dropLast(3).drop { $0 == "0" }
-            return "\(code.isEmpty ? "0" : code).HK"
-        }
-        guard text.allSatisfy({ $0.isASCII && $0.isNumber }) else { return "\(text).US" }
-        if text.count == 6 { return "\(text).\("659".contains(text.first!) ? "SH" : "SZ")" }
-        let trimmed = text.drop { $0 == "0" }
-        return "\(trimmed.isEmpty ? "0" : trimmed).HK"
-    }
 }
 
 // MARK: - 搜索

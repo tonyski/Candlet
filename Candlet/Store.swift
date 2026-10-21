@@ -63,30 +63,10 @@ final class Store {
 
     // MARK: - 编辑自选
 
-    /// 添加前向长桥或 Binance 校验并取名称；长桥未连上时先只存代码
-    func add(_ input: String) async throws {
-        guard let symbol = Stock.normalize(input) else { return }
-        guard !stocks.contains(where: { $0.symbol == symbol }) else { throw AppError("\(symbol) 已在自选里") }
-
-        var name = symbol
-        if Stock.isCrypto(symbol) {
-            quotes[symbol] = try await Binance.quote(symbol)
-            name = String(symbol.prefix { $0 != "/" })
-        } else if status == .live {
-            let info: JSON
-            do {
-                info = try await serve.call("quote.static_info", ["symbols": .strings([symbol])])
-            } catch is RPCError {
-                throw AppError("找不到 \(symbol)")
-            } catch {
-                throw AppError("网络异常，请稍后再试")
-            }
-            guard let found = Self.names(info)[symbol] else { throw AppError("找不到 \(symbol)") }
-            name = found
-        }
-        if !stocks.contains(where: { $0.symbol == symbol }) {
-            stocks.append(Stock(symbol: symbol, name: name))
-        }
+    /// 建议都来自证券目录，无需再校验
+    func add(_ stock: Stock) {
+        guard !stocks.contains(where: { $0.symbol == stock.symbol }) else { return }
+        stocks.append(stock)
     }
 
     /// A 股、港股、美股、新加坡证券列表 + Binance USDT 交易对；长桥未连上时下次再试
@@ -180,7 +160,6 @@ final class Store {
             retryDelay = Self.minRetryDelay
             lastRefresh = .now
             sync()   // 连接期间增删的自选在这里补上
-            await refreshNames()
         } catch {
             guard current == generation else { return }
             fail(error)
@@ -322,26 +301,6 @@ final class Store {
             points.removeFirst(max(0, points.count - Stock.cryptoSlots))
         }
         sparks[symbol] = points
-    }
-
-    /// 离线时添加的只有代码，连上后补全名称
-    private func refreshNames() async {
-        guard let result = try? await serve.call("quote.static_info", ["symbols": .strings(stockSymbols)])
-        else { return }
-        let names = Self.names(result)
-        let renamed = stocks.map { Stock(symbol: $0.symbol, name: names[$0.symbol] ?? $0.name) }
-        if renamed != stocks { stocks = renamed }
-    }
-
-    private static func names(_ result: JSON) -> [String: String] {
-        var names: [String: String] = [:]
-        for info in result.list("secu_static_info", "infos") {
-            guard let symbol = info["symbol"]?.string else { continue }
-            names[symbol] = [info["name_cn"], info["name_hk"], info["name_en"]]
-                .compactMap { $0?.string }
-                .first { !$0.isEmpty }
-        }
-        return names
     }
 
     // MARK: - 本地存储

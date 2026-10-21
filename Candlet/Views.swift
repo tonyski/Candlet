@@ -4,9 +4,7 @@ struct WatchlistView: View {
     @Environment(Store.self) private var store
     @AppStorage("redUp") private var redUp = true
     @State private var adding = false
-    @State private var checking = false
     @State private var input = ""
-    @State private var error: String?
     @State private var suggestions: [Stock] = []
     @FocusState private var focused: Bool
 
@@ -81,40 +79,36 @@ struct WatchlistView: View {
     }
 
     private var addField: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                TextField("代码或名称", text: $input)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .focused($focused)
-                    .disabled(checking)
-                    .onSubmit { submit(input) }
-                    .onExitCommand(perform: closeAddField)
-                    // 系统补全菜单：选中后代码会填进输入框，这时直接添加
-                    .textInputSuggestions {
-                        ForEach(suggestions, id: \.symbol) { stock in
-                            HStack {
-                                Text(stock.name)
-                                Spacer()
-                                Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .textInputCompletion(stock.symbol)
+        HStack(spacing: 6) {
+            TextField("代码或名称", text: $input)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .focused($focused)
+                .onExitCommand(perform: closeAddField)
+                // 系统补全菜单：选中后代码会填进输入框，这时直接添加
+                .textInputSuggestions {
+                    ForEach(suggestions, id: \.symbol) { stock in
+                        HStack {
+                            Text(stock.name)
+                            Spacer()
+                            Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
+                                .foregroundStyle(.secondary)
                         }
+                        .textInputCompletion(stock.symbol)
                     }
-                if checking {
-                    ProgressView().controlSize(.mini)
                 }
-            }
-            if let error {
-                Text(error).font(.caption2).foregroundStyle(Color.quoteRed)
+            if !store.catalogReady {
+                ProgressView().controlSize(.mini)   // 证券目录加载中
             }
         }
         .padding(.horizontal, margin)
         .padding(.bottom, 10)
         .onAppear(perform: store.loadCatalog)
         .onChange(of: input) { _, text in
-            if suggestions.contains(where: { $0.symbol == text }) { submit(text) }
+            if let stock = suggestions.first(where: { $0.symbol == text }) {
+                store.add(stock)
+                input = ""
+            }
         }
         .task(id: "\(input)|\(store.catalogReady)") {
             let found = await store.suggestions(for: input)
@@ -122,11 +116,8 @@ struct WatchlistView: View {
         }
     }
 
-
-
     private func openAddField() {
         input = ""
-        error = nil
         adding = true
         focused = true
     }
@@ -134,24 +125,7 @@ struct WatchlistView: View {
     private func closeAddField() {
         adding = false
         input = ""
-        error = nil
         focused = false
-    }
-
-    private func submit(_ text: String) {
-        guard !checking, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        checking = true
-        Task {
-            do {
-                try await store.add(text)
-                input = ""
-                error = nil
-            } catch {
-                self.error = error.localizedDescription
-            }
-            checking = false
-            focused = true   // 校验期间输入框被禁用会丢焦点
-        }
     }
 
     @ViewBuilder
