@@ -28,7 +28,7 @@ struct WatchlistView: View {
             Divider()
             list
         }
-        .frame(width: 320)
+        .frame(width: 360)
         .onAppear(perform: store.panelOpened)
         // 某些系统版本上 MenuBarExtra 的 onAppear 只在首次打开时触发，用面板成为 key window 兜底
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
@@ -188,37 +188,35 @@ struct StockRow: View, Equatable {
 
             Group {
                 Sparkline(points: spark, baseline: quote?.baseline, color: direction.line)
-                    .frame(width: 60, height: 22)
+                    .frame(width: 56, height: 24)
 
-                // 价格与胶囊内文字右侧留同样的内边距，两行数字的末位对齐
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(quote?.last.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .padding(.trailing, badgePadding)
-                    Text(quote?.change.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always())) ?? "--")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .foregroundStyle(direction.text)
-                        .padding(.horizontal, badgePadding)
-                        .frame(width: 62, height: 16, alignment: .trailing)
-                        .background(direction.fill, in: .rect(cornerRadius: 4))
-                }
-                .monospacedDigit()
-                .frame(width: 72, alignment: .trailing)
+                Text(quote?.last.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(direction.price)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: 64, alignment: .trailing)
+
+                Text(quote?.change.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always())) ?? "--")
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .foregroundStyle(direction.text)
+                    .frame(width: 62, height: 22)
+                    .background(direction.fill, in: .rect(cornerRadius: 5))
             }
+            .monospacedDigit()
             .opacity(stale ? 0.45 : 1)
         }
         .padding(.horizontal, 8)
         .accessibilityElement(children: .combine)
     }
 
-    private let badgePadding: CGFloat = 6
-
     /// 涨跌幅放在实心胶囊里，背后的壁纸再花也看得清
-    private var direction: (line: Color, fill: Color, text: Color) {
-        guard let change = quote?.change, change != 0 else { return (.secondary, .secondary.opacity(0.2), .secondary) }
-        return (change > 0) == redUp ? (.quoteRed, .badgeRed, .white) : (.quoteGreen, .badgeGreen, .white)
+    private var direction: (line: Color, price: Color, fill: Color, text: Color) {
+        guard let change = quote?.change, change != 0 else { return (.secondary, .primary, .secondary.opacity(0.2), .secondary) }
+        return (change > 0) == redUp ? (.quoteRed, .quoteRed, .badgeRed, .white)
+                                     : (.quoteGreen, .quoteGreen, .badgeGreen, .white)
     }
 }
 
@@ -266,6 +264,12 @@ struct Sparkline: View {
                     let point = CGPoint(x: CGFloat(i) * step, y: y(price))
                     i == 0 ? line.move(to: point) : line.addLine(to: point)
                 }
+                var area = line
+                area.addLine(to: CGPoint(x: size.width, y: size.height))
+                area.addLine(to: CGPoint(x: 0, y: size.height))
+                area.closeSubpath()
+                context.fill(area, with: .linearGradient(Gradient(colors: [color.opacity(0.22), color.opacity(0)]),
+                                                         startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
                 context.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 1, lineJoin: .round))
             }
         } else {
