@@ -12,6 +12,8 @@ final class Store {
     private(set) var cryptoLive = false
     private(set) var quotes: [String: Quote] = [:]
     private(set) var sparks: [String: [SparkPoint]] = [:]
+    /// 总股本，乘以最新价得到市值
+    private(set) var shares: [String: Double] = [:]
     private(set) var stocks: [Stock] = Store.load() {
         didSet {
             Self.save(stocks)
@@ -213,6 +215,13 @@ final class Store {
         let snapshots = result.list("quotes")
         if snapshots.isEmpty { await refresh(symbols) } else { store(snapshots) }
         await loadSparks(symbols)
+        if let info = try? await serve.call("quote.static_info", ["symbols": .strings(symbols)]) {
+            for item in info.list("secu_static_info") {
+                if let symbol = item["symbol"]?.string, let total = item["total_shares"]?.double, total > 0 {
+                    shares[symbol] = total
+                }
+            }
+        }
     }
 
     /// 重新拉快照和分时：跨日、跨时段后昨收和分时线都要换

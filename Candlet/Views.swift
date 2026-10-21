@@ -140,7 +140,8 @@ struct WatchlistView: View {
                 ForEach(store.stocks) { stock in
                     StockRow(stock: stock, quote: store.quotes[stock.symbol],
                              spark: store.sparks[stock.symbol] ?? [], redUp: redUp,
-                             stale: stock.isCrypto ? !store.cryptoLive : store.status != .live)
+                             stale: stock.isCrypto ? !store.cryptoLive : store.status != .live,
+                             marketCap: store.quotes[stock.symbol].flatMap { quote in store.shares[stock.symbol].map { $0 * quote.last } })
                         .modifier(HoverHighlight())
                         .frame(height: rowHeight)
                         .listRowInsets(EdgeInsets())
@@ -169,6 +170,7 @@ struct StockRow: View, Equatable {
     let redUp: Bool
     /// 离线时价格不再更新，调淡以免被当成实时价
     let stale: Bool
+    let marketCap: Double?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -193,13 +195,7 @@ struct StockRow: View, Equatable {
                     .minimumScaleFactor(0.8)
                     .frame(width: 64, alignment: .trailing)
 
-                Text(quote?.change.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always())) ?? "--")
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .foregroundStyle(direction.text)
-                    .frame(width: 62, height: 22)
-                    .background(direction.fill, in: .rect(cornerRadius: 5))
+                Badge(change: quote?.change, marketCap: marketCap, fill: direction.fill, text: direction.text)
             }
             .monospacedDigit()
             .opacity(stale ? 0.45 : 1)
@@ -213,6 +209,40 @@ struct StockRow: View, Equatable {
         guard let change = quote?.change, change != 0 else { return (.secondary, .primary, .secondary.opacity(0.2), .secondary) }
         return (change > 0) == redUp ? (.quoteRed, .quoteRed, .badgeRed, .white)
                                      : (.quoteGreen, .quoteGreen, .badgeGreen, .white)
+    }
+}
+
+/// 涨跌幅 / 市值胶囊，点击切换所有行。自己读取设置，切换时不必重算整行
+struct Badge: View {
+    let change: Double?
+    let marketCap: Double?
+    let fill: Color
+    let text: Color
+    @AppStorage("showMarketCap") private var showMarketCap = false
+
+    var body: some View {
+        Text((showMarketCap ? marketCap.map(Self.compact) : change?.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always()))) ?? "--")
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .foregroundStyle(text)
+            .frame(width: 62, height: 22)
+            .background(fill, in: .rect(cornerRadius: 5))
+            .contentShape(.rect)
+            .onTapGesture { showMarketCap.toggle() }
+            .help(showMarketCap ? "市值，点击显示涨跌幅" : "涨跌幅，点击显示市值")
+    }
+
+    /// 4.94万亿、1334亿、12.3亿
+    private static func compact(_ value: Double) -> String {
+        let (scaled, unit) = switch value {
+        case 1e12...: (value / 1e12, "万亿")
+        case 1e8...: (value / 1e8, "亿")
+        case 1e4...: (value / 1e4, "万")
+        default: (value, "")
+        }
+        let digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2
+        return scaled.formatted(.number.precision(.fractionLength(digits)).grouping(.never)) + unit
     }
 }
 
