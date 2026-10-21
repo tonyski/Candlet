@@ -128,7 +128,7 @@ nonisolated struct Quote: Sendable, Equatable {
     init?(snapshot j: JSON) {
         guard let regularClose = j["last_done"]?.double else { return nil }
         let legs: [(String?, JSON?)] = [(nil, j), ("盘前", j["pre_market_quote"]),
-                                        ("盘后", j["post_market_quote"]), ("夜盘", j["over_night_quote"])]
+                                        ("盘后", j["post_market_quote"]), ("夜盘", j["overnight_quote"] ?? j["over_night_quote"])]
         let latest = legs
             .compactMap { label, leg -> (String?, Double, Double?, Date)? in
                 guard let leg, let last = leg["last_done"]?.double,
