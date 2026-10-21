@@ -285,7 +285,7 @@ struct StockRow: View, Equatable {
                                 .font(.system(size: 8.5, weight: .medium))
                         }
                         .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary.opacity(0.7))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .frame(maxWidth: 134, alignment: .trailing)
