@@ -116,16 +116,20 @@ struct WatchlistView: View {
 
     /// 新建、重命名都直接在标签上编辑：回车或点别处保存，Esc 取消
     private var nameTab: some View {
-        TextField("分组名称", text: $groupName, prompt: Text("分组名称").foregroundStyle(.tertiary))
-            .textFieldStyle(.plain)
-            .fixedSize()
-            .focused($nameFocused)
-            .onAppear { nameFocused = true }
-            .onSubmit(commitGroupName)
-            .onExitCommand { naming = nil }
-            .onChange(of: nameFocused) { _, focused in if !focused { commitGroupName() } }
-            .groupTab(active: true)
-            .id("naming")
+        // 无边框输入框的提示文字会跟随正文颜色，自己画一个浅色占位；它也撑起最小宽度
+        ZStack(alignment: .leading) {
+            Text("分组名称").foregroundStyle(.tertiary).opacity(groupName.isEmpty ? 1 : 0)
+            TextField("分组名称", text: $groupName, prompt: Text(""))
+                .textFieldStyle(.plain)
+                .fixedSize()
+                .focused($nameFocused)
+                .onAppear { nameFocused = true }
+                .onSubmit(commitGroupName)
+                .onExitCommand { naming = nil }
+                .onChange(of: nameFocused) { _, focused in if !focused { commitGroupName() } }
+        }
+        .groupTab(active: true)
+        .id("naming")
     }
 
     private func startNaming(_ mode: Naming, _ name: String) {
