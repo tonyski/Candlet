@@ -27,6 +27,13 @@ final class Store {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRefresh = Date.distantPast
 
+    /// 各市场常规时段都落在同一个 UTC 日内，用它判断分时是否跨日
+    private static let utc: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        return calendar
+    }()
+
     private static let minRetryDelay = Duration.seconds(5)
     private static let maxRetryDelay = Duration.seconds(300)
 
@@ -200,9 +207,11 @@ final class Store {
         if quote.apply(tick) { Task { await reload([symbol]) } }
         quotes[symbol] = quote
 
-        // 正常时段的成交接到分时线末尾，同一分钟内只更新最后一个点
+        // 正常时段的成交接到分时线末尾，同一分钟内只更新最后一个点；跨日则从新的一天重新开始
         guard quote.session == nil, var points = sparks[symbol], let last = points.last else { return }
-        if quote.time.timeIntervalSince(last.time) < 60 {
+        if !Self.utc.isDate(quote.time, inSameDayAs: last.time) {
+            points = [SparkPoint(time: quote.time, price: quote.last)]
+        } else if quote.time.timeIntervalSince(last.time) < 60 {
             points[points.count - 1].price = quote.last
         } else {
             points.append(SparkPoint(time: quote.time, price: quote.last))

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 nonisolated struct AppError: LocalizedError {
     let errorDescription: String?
@@ -34,7 +35,9 @@ actor Serve {
     private var input: FileHandle?
     private var nextID = 0
     private var pending: [Int: CheckedContinuation<JSON, any Error>] = [:]
-    private var stderr = ""
+    /// stderr 由 readabilityHandler 在后台线程写入，退出判断时同步读取，不依赖异步任务的先后
+    private nonisolated let stderr = Mutex("")
+    private var stderrHandle: FileHandle?
     private var cli: URL?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -71,11 +74,11 @@ actor Serve {
             let data = handle.availableData
             // EOF 后 handler 会被反复空调用，必须摘掉，否则会一直空转
             guard !data.isEmpty, let self else { handle.readabilityHandler = nil; return }
-            let text = String(decoding: data, as: UTF8.self)
-            Task { await self.log(text) }
+            self.log(data)
         }
 
-        stderr = ""
+        stderr.withLock { $0 = "" }
+        stderrHandle = stderrPipe.fileHandleForReading
         try proc.run()
         process = proc
         input = stdin.fileHandleForWriting
@@ -92,6 +95,8 @@ actor Serve {
         let proc = process
         process = nil          // 解除关联后，旧进程的退出通知会被忽略
         input = nil
+        stderrHandle?.readabilityHandler = nil
+        stderrHandle = nil
         failPending(.generic)
         proc?.terminate()
     }
@@ -130,8 +135,8 @@ actor Serve {
         }
     }
 
-    private func log(_ text: String) {
-        stderr = String((stderr + text).suffix(500))
+    private nonisolated func log(_ data: Data) {
+        stderr.withLock { $0 = String(($0 + String(decoding: data, as: UTF8.self)).suffix(500)) }
     }
 
     private func exited(_ id: ObjectIdentifier) {
@@ -139,7 +144,11 @@ actor Serve {
         self.process = nil
         input = nil
 
-        let reason = stderr.lowercased()
+        // 进程已退出，把还没被 handler 读走的输出一次读完
+        stderrHandle?.readabilityHandler = nil
+        if let rest = try? stderrHandle?.readToEnd() { log(rest) }
+        stderrHandle = nil
+        let reason = stderr.withLock { $0.lowercased() }
         let error: Disconnected = ["token", "auth", "login"].contains { reason.contains($0) } ? .login : .generic
         failPending(error)
         sink.yield(.exited(error))
