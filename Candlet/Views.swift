@@ -26,7 +26,7 @@ struct WatchlistView: View {
             header
             if store.groups.count > 1 { groupTabs }
             if adding { addField }
-            if naming != nil { nameField }
+            if naming == .new { nameField }
             if case .offline(let reason, _) = store.status {
                 Text(reason)
                     .font(.caption2)
@@ -93,13 +93,27 @@ struct WatchlistView: View {
             HStack(spacing: 2) {
                 ForEach(store.groups) { item in
                     let selected = item.id == group.id
-                    Button(item.name) { groupID = item.id.uuidString }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12, weight: selected ? .semibold : .regular))
-                        .foregroundStyle(selected ? .primary : .secondary)
-                        .padding(.horizontal, 8)
-                        .frame(height: 22)
-                        .background(selected ? Color.primary.opacity(0.08) : .clear, in: .capsule)
+                    Group {
+                        if selected, naming == .rename {
+                            // 重命名直接在标签上编辑
+                            TextField("分组名称", text: $groupName)
+                                .textFieldStyle(.plain)
+                                .fixedSize()
+                                .focused($nameFocused)
+                                .onAppear { nameFocused = true }
+                                .onSubmit(commitGroupName)
+                                .onExitCommand { naming = nil }
+                                .onChange(of: nameFocused) { _, focused in if !focused { commitGroupName() } }   // 点别处即保存
+                        } else {
+                            Button(item.name) { groupID = item.id.uuidString }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(selected ? .primary : .secondary)
+                        }
+                    }
+                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(selected ? Color.primary.opacity(0.08) : .clear, in: .capsule)
                 }
             }
             .padding(.horizontal, margin - 8)   // 标签自带 8pt 内边距，文字与标题对齐
@@ -108,9 +122,9 @@ struct WatchlistView: View {
         .padding(.bottom, 6)
     }
 
-    /// 与搜索框同一位置的一行输入：回车确认，Esc 取消
+    /// 新建分组：与搜索框同一位置的一行输入，回车确认，Esc 取消
     private var nameField: some View {
-        TextField(naming == .new ? "新分组名称" : "分组名称", text: $groupName)
+        TextField("新分组名称", text: $groupName)
             .textFieldStyle(.roundedBorder)
             .controlSize(.small)
             .focused($nameFocused)
