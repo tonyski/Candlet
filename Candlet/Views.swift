@@ -12,7 +12,8 @@ struct WatchlistView: View {
     @State private var groupName = ""
     @FocusState private var nameFocused: Bool
 
-    private enum Naming { case new, rename }
+    /// 重命名时记下目标分组，保存时不依赖当前选中的是哪个
+    private enum Naming: Equatable { case new, rename(StockGroup.ID) }
 
     /// 当前分组；记住的分组被删掉时回到第一个
     private var group: StockGroup { store.groups.first { $0.id.uuidString == groupID } ?? store.groups[0] }
@@ -64,7 +65,7 @@ struct WatchlistView: View {
             Menu {
                 Button("新建分组…") { startNaming(.new, "") }
                 if store.groups.count > 1 {
-                    Button("重命名分组…") { startNaming(.rename, group.name) }
+                    Button("重命名分组…") { startNaming(.rename(group.id), group.name) }
                     let count = group.stocks.count   // 股票会一起删除，写在菜单上
                     Button(count == 0 ? "删除分组" : "删除分组（含 \(count) 只）", role: .destructive) { store.deleteGroup(group.id) }
                 }
@@ -94,7 +95,7 @@ struct WatchlistView: View {
                 HStack(spacing: 2) {
                     ForEach(store.groups) { item in
                         let selected = item.id == group.id
-                        if selected, naming == .rename {
+                        if naming == .rename(item.id) {
                             nameTab
                         } else {
                             let active = selected && naming != .new   // 新建时高亮让给正在编辑的标签
@@ -142,8 +143,10 @@ struct WatchlistView: View {
     private func commitGroupName() {
         guard naming != nil else { return }   // 回车保存后失焦还会再调用一次
         let name = groupName.trimmingCharacters(in: .whitespaces)
-        if !name.isEmpty {
-            if naming == .new { groupID = store.createGroup(name).uuidString } else { store.renameGroup(group.id, to: name) }
+        switch naming {
+        case .new where !name.isEmpty: groupID = store.createGroup(name).uuidString
+        case .rename(let id) where !name.isEmpty: store.renameGroup(id, to: name)
+        default: break
         }
         naming = nil
     }
