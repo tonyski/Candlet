@@ -65,7 +65,7 @@ struct WatchlistView: View {
             }
             .help(addTitle)
             if case .available(let version, _) = updater.state {
-                Circle().fill(.red).frame(width: 6, height: 6).help("有新版本 \(version)")
+                Circle().fill(.tint).frame(width: 6, height: 6).help("有新版本 \(version)")   // 不用红色，避免和断线状态灯混淆
             }
             Menu {
                 Button("新建分组…") { startNaming(.new, "") }
@@ -160,7 +160,6 @@ struct WatchlistView: View {
     @ViewBuilder
     private var updateItem: some View {
         switch updater.state {
-        case .idle: Button("检查更新", action: updater.check)
         case .checking: Button("正在检查更新…") {}.disabled(true)
         case .upToDate: Button("已是最新版本 \(updater.current)", action: updater.check)
         case .failed: Button("检查更新失败，重试", action: updater.check)

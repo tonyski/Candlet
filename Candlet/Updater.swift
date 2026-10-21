@@ -4,19 +4,19 @@ import Foundation
 @Observable
 final class Updater {
     enum State: Equatable {
-        case idle, checking, upToDate, failed
+        case checking, upToDate, failed
         case available(version: String, url: URL)
     }
 
-    private(set) var state = State.idle
+    private(set) var state = State.checking
     let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
 
     private static let latest = URL(string: "https://api.github.com/repos/tonyski/Candlet/releases/latest")!
 
     init() { check() }
 
+    /// 检查期间菜单项不可点，不会重复发起
     func check() {
-        guard state != .checking else { return }
         state = .checking
         Task { state = await Self.fetch(current: current) }
     }
