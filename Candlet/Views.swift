@@ -24,9 +24,8 @@ struct WatchlistView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if store.groups.count > 1 { groupTabs }
+            if store.groups.count > 1 || naming == .new { groupTabs }
             if adding { addField }
-            if naming == .new { nameField }
             if case .offline(let reason, _) = store.status {
                 Text(reason)
                     .font(.caption2)
@@ -93,28 +92,20 @@ struct WatchlistView: View {
             HStack(spacing: 2) {
                 ForEach(store.groups) { item in
                     let selected = item.id == group.id
-                    Group {
-                        if selected, naming == .rename {
-                            // 重命名直接在标签上编辑
-                            TextField("分组名称", text: $groupName)
-                                .textFieldStyle(.plain)
-                                .fixedSize()
-                                .focused($nameFocused)
-                                .onAppear { nameFocused = true }
-                                .onSubmit(commitGroupName)
-                                .onExitCommand { naming = nil }
-                                .onChange(of: nameFocused) { _, focused in if !focused { commitGroupName() } }   // 点别处即保存
-                        } else {
-                            Button(item.name) { groupID = item.id.uuidString }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(selected ? .primary : .secondary)
-                        }
+                    if selected, naming == .rename {
+                        nameTab
+                    } else {
+                        let active = selected && naming != .new   // 新建时高亮让给正在编辑的标签
+                        Button(item.name) { groupID = item.id.uuidString }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: active ? .semibold : .regular))
+                            .foregroundStyle(active ? .primary : .secondary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 22)
+                            .background(active ? Color.primary.opacity(0.08) : .clear, in: .capsule)
                     }
-                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
-                    .padding(.horizontal, 8)
-                    .frame(height: 22)
-                    .background(selected ? Color.primary.opacity(0.08) : .clear, in: .capsule)
                 }
+                if naming == .new { nameTab }
             }
             .padding(.horizontal, margin - 8)   // 标签自带 8pt 内边距，文字与标题对齐
         }
@@ -122,17 +113,20 @@ struct WatchlistView: View {
         .padding(.bottom, 6)
     }
 
-    /// 新建分组：与搜索框同一位置的一行输入，回车确认，Esc 取消
-    private var nameField: some View {
-        TextField("新分组名称", text: $groupName)
-            .textFieldStyle(.roundedBorder)
-            .controlSize(.small)
+    /// 新建、重命名都直接在标签上编辑：回车或点别处保存，Esc 取消
+    private var nameTab: some View {
+        TextField("分组名称", text: $groupName)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12, weight: .semibold))
+            .fixedSize()
             .focused($nameFocused)
             .onAppear { nameFocused = true }
             .onSubmit(commitGroupName)
             .onExitCommand { naming = nil }
-            .padding(.horizontal, margin)
-            .padding(.bottom, 10)
+            .onChange(of: nameFocused) { _, focused in if !focused { commitGroupName() } }
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(Color.primary.opacity(0.08), in: .capsule)
     }
 
     private func startNaming(_ mode: Naming, _ name: String) {
@@ -142,6 +136,7 @@ struct WatchlistView: View {
     }
 
     private func commitGroupName() {
+        guard naming != nil else { return }   // 回车保存后失焦还会再调用一次
         let name = groupName.trimmingCharacters(in: .whitespaces)
         if !name.isEmpty {
             if naming == .new { groupID = store.createGroup(name).uuidString } else { store.renameGroup(group.id, to: name) }
