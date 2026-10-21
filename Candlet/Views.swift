@@ -24,15 +24,7 @@ struct WatchlistView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if store.groups.count > 1 {
-                Picker("分组", selection: Binding(get: { group.id.uuidString }, set: { groupID = $0 })) {
-                    ForEach(store.groups) { Text($0.name).tag($0.id.uuidString) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal, margin)
-                .padding(.bottom, 8)
-            }
+            if store.groups.count > 1 { groupTabs }
             if adding { addField }
             if naming != nil { nameField }
             if case .offline(let reason, _) = store.status {
@@ -93,6 +85,27 @@ struct WatchlistView: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, margin)
         .frame(height: 36)
+    }
+
+    /// 两个以上分组时显示；文字标签，当前分组加粗
+    private var groupTabs: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 2) {
+                ForEach(store.groups) { item in
+                    let selected = item.id == group.id
+                    Button(item.name) { groupID = item.id.uuidString }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? .primary : .secondary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(selected ? Color.primary.opacity(0.08) : .clear, in: .capsule)
+                }
+            }
+            .padding(.horizontal, margin - 8)   // 标签自带 8pt 内边距，文字与标题对齐
+        }
+        .scrollIndicators(.never)
+        .padding(.bottom, 6)
     }
 
     /// 与搜索框同一位置的一行输入：回车确认，Esc 取消
