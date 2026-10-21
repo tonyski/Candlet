@@ -18,7 +18,7 @@ struct WatchlistView: View {
             if case .offline(let reason, _) = store.status {
                 Text(reason)
                     .font(.caption2)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.warning)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 6)
@@ -26,7 +26,7 @@ struct WatchlistView: View {
             Divider()
             list
         }
-        .frame(width: 300)
+        .frame(width: 320)
         .onAppear(perform: store.panelOpened)
         // 某些系统版本上 MenuBarExtra 的 onAppear 只在首次打开时触发，用面板成为 key window 兜底
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
@@ -92,7 +92,7 @@ struct WatchlistView: View {
                 }
             }
             if let error {
-                Text(error).font(.caption2).foregroundStyle(.red)
+                Text(error).font(.caption2).foregroundStyle(Color.quoteRed)
             }
         }
         .padding(.horizontal, 12)
@@ -197,7 +197,7 @@ struct StockRow: View, Equatable {
                         Text(quote?.change.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always())) ?? "--")
                             .foregroundStyle(color)
                     }
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: 10.5, weight: .semibold))
                 }
                 .monospacedDigit()
                 .frame(width: 72, alignment: .trailing)
@@ -210,7 +210,7 @@ struct StockRow: View, Equatable {
 
     private var color: Color {
         guard let change = quote?.change, change != 0 else { return .secondary }
-        return (change > 0) == redUp ? .red : .green
+        return (change > 0) == redUp ? .quoteRed : .quoteGreen
     }
 }
 
@@ -264,5 +264,20 @@ struct Sparkline: View {
         } else {
             Color.clear
         }
+    }
+}
+
+/// 面板是半透明玻璃，浅色模式下背后多为浅灰：系统的亮绿、亮红、橙色对比度不足，换成深一档的颜色；深色模式沿用系统色
+extension Color {
+    static let quoteGreen = adaptive(light: 0x0E_7C_3A, dark: 0x30_D1_58)
+    static let quoteRed = adaptive(light: 0xC8_2B_2B, dark: 0xFF_6B_6B)
+    static let warning = adaptive(light: 0x9E_50_00, dark: 0xFF_B3_40)
+
+    private static func adaptive(light: Int, dark: Int) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let hex = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
+                           blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+        })
     }
 }
