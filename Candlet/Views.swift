@@ -10,6 +10,8 @@ struct WatchlistView: View {
     @FocusState private var focused: Bool
 
     private let rowHeight: CGFloat = 40
+    /// 面板内容左右边距。List 自带约 8pt 行内边距，行内再补 8pt 对齐到这里
+    private let margin: CGFloat = 16
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,8 +22,8 @@ struct WatchlistView: View {
                     .font(.caption2)
                     .foregroundStyle(Color.warning)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, margin)
+                    .padding(.bottom, 8)
             }
             Divider()
             list
@@ -65,8 +67,8 @@ struct WatchlistView: View {
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)
-        .padding(.horizontal, 12)
-        .frame(height: 30)
+        .padding(.horizontal, margin)
+        .frame(height: 36)
     }
 
     private var statusLight: (Color, String) {
@@ -95,8 +97,8 @@ struct WatchlistView: View {
                 Text(error).font(.caption2).foregroundStyle(Color.quoteRed)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+        .padding(.horizontal, margin)
+        .padding(.bottom, 10)
     }
 
     private func openAddField() {
@@ -158,6 +160,7 @@ struct WatchlistView: View {
             .contentMargins(.vertical, 0, for: .scrollContent)
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: min(CGFloat(store.stocks.count) * rowHeight, 480))
+            .padding(.vertical, 6)
         }
     }
 }
@@ -222,7 +225,6 @@ struct HoverHighlight: ViewModifier {
         content
             .frame(maxHeight: .infinity)
             .background(.primary.opacity(hovering ? 0.06 : 0), in: .rect(cornerRadius: 6))
-            .padding(.horizontal, 4)
             .contentShape(.rect)
             .onHover { hovering = $0 }
     }
