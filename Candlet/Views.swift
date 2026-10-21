@@ -257,7 +257,7 @@ struct StockRow: View, Equatable {
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
                 Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(Self.detail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -273,21 +273,21 @@ struct StockRow: View, Equatable {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(direction.price)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                            .frame(width: 64, alignment: .trailing)
+                            .minimumScaleFactor(0.6)   // 小价格币的有效数字较长
+                            .frame(width: Self.priceWidth, alignment: .trailing)
                         Badge(change: quote?.change, marketCap: marketCap, fill: direction.fill, text: direction.text)
                     }
                     if let extended = quote?.latestExtended {
                         HStack(spacing: 8) {
                             Text(Self.price(extended.last))
-                                .frame(width: 64, alignment: .trailing)
+                                .frame(width: Self.priceWidth, alignment: .trailing)
                             HStack(spacing: 0) {
                                 Text(Self.percent(extended.change))
                                 Spacer(minLength: 2)
                                 Image(systemName: extended.session.icon)
                                     .font(.system(size: 8.5, weight: .medium))
                             }
-                            .frame(width: 62)
+                            .frame(width: Self.badgeWidth)
                         }
                         .font(.system(size: 10.5))
                         .foregroundStyle(Self.detail)   // 参考富途：整行统一灰色，红绿只留给主行
@@ -305,9 +305,14 @@ struct StockRow: View, Equatable {
 
     /// 第二排文字（代码、市场、延长时段）统一用的灰色
     static let detail = Color.primary.opacity(0.6)
+    /// 价格列与胶囊列，第二行按这两列对齐
+    static let priceWidth: CGFloat = 64
+    static let badgeWidth: CGFloat = 62
 
+    /// 1 以下按有效数字显示，PEPE 之类的小价格币不会变成 0.00
     static func price(_ value: Double?) -> String {
-        value?.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--"
+        guard let value else { return "--" }
+        return value.formatted(.number.precision(value < 1 ? .significantDigits(2...4) : .fractionLength(2...3)).grouping(.never))
     }
 
     static func percent(_ value: Double) -> String {
@@ -336,7 +341,7 @@ struct Badge: View {
             .lineLimit(1)
             .minimumScaleFactor(0.75)
             .foregroundStyle(text)
-            .frame(width: 62, height: 22)
+            .frame(width: StockRow.badgeWidth, height: 22)
             .background(fill, in: .rect(cornerRadius: 5))
             .contentShape(.rect)
             .onTapGesture { showMarketCap.toggle() }
