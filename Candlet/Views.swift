@@ -8,11 +8,10 @@ struct WatchlistView: View {
     @State private var suggestions: [Stock] = []
     @FocusState private var focused: Bool
     @AppStorage("group") private var groupID = ""
-    @State private var editingGroup: GroupEdit?
+    @State private var naming: Naming?
     @State private var groupName = ""
-    @FocusState private var naming: Bool
 
-    private enum GroupEdit: Equatable { case new, rename(StockGroup.ID) }
+    private enum Naming { case new, rename }
 
     /// 当前分组；记住的分组被删掉时回到第一个
     private var group: StockGroup { store.groups.first { $0.id.uuidString == groupID } ?? store.groups[0] }
@@ -24,7 +23,15 @@ struct WatchlistView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if store.groups.count > 1 || editingGroup != nil { groupBar }
+            if store.groups.count > 1 {
+                Picker("分组", selection: Binding(get: { group.id.uuidString }, set: { groupID = $0 })) {
+                    ForEach(store.groups) { Text($0.name).tag($0.id.uuidString) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, margin)
+                .padding(.bottom, 8)
+            }
             if adding { addField }
             if case .offline(let reason, _) = store.status {
                 Text(reason)
@@ -38,6 +45,12 @@ struct WatchlistView: View {
             list
         }
         .frame(width: 360)
+        .alert(naming == .new ? "新建分组" : "重命名分组",
+               isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+            TextField("名称", text: $groupName)
+            Button("取消", role: .cancel) {}
+            Button("好", action: commitGroupName)
+        }
         .onAppear(perform: store.panelOpened)
         // 某些系统版本上 MenuBarExtra 的 onAppear 只在首次打开时触发，用面板成为 key window 兜底
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
@@ -62,7 +75,12 @@ struct WatchlistView: View {
             }
             .help(addTitle)
             Menu {
-                Button("新建分组") { groupName = ""; editingGroup = .new }
+                Button("新建分组…") { groupName = ""; naming = .new }
+                if store.groups.count > 1 {
+                    Button("重命名分组…") { groupName = group.name; naming = .rename }
+                    Button("删除分组", role: .destructive) { store.deleteGroup(group.id) }
+                }
+                Divider()
                 Button("重新连接", action: store.reconnect)
                 Toggle("红涨绿跌", isOn: $redUp)
                 Divider()
@@ -81,63 +99,10 @@ struct WatchlistView: View {
         .frame(height: 36)
     }
 
-    // MARK: - 分组
-
-    /// 两个以上分组时才显示；名称直接在标签栏里编辑
-    private var groupBar: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 2) {
-                ForEach(store.groups) { item in
-                    if editingGroup == .rename(item.id) {
-                        groupField
-                    } else {
-                        groupTab(item.name, id: item.id)
-                            .contextMenu {
-                                Button("重命名") { groupName = item.name; editingGroup = .rename(item.id) }
-                                if store.groups.count > 1 {
-                                    Button("删除分组", role: .destructive) { store.deleteGroup(item.id) }
-                                }
-                            }
-                    }
-                }
-                if editingGroup == .new { groupField }
-            }
-            .padding(.horizontal, margin - 8)
-        }
-        .scrollIndicators(.never)
-        .frame(height: 30)
-    }
-
-    private func groupTab(_ name: String, id: StockGroup.ID) -> some View {
-        let selected = group.id == id
-        return Button(name) { groupID = id.uuidString }
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: selected ? .semibold : .regular))
-            .foregroundStyle(selected ? .primary : .secondary)
-            .padding(.horizontal, 8)
-            .frame(height: 22)
-            .background(selected ? Color.primary.opacity(0.08) : .clear, in: .capsule)
-    }
-
-    private var groupField: some View {
-        TextField("分组名称", text: $groupName)
-            .textFieldStyle(.roundedBorder)
-            .controlSize(.small)
-            .frame(width: 96)
-            .focused($naming)
-            .onAppear { naming = true }
-            .onSubmit(commitGroupName)
-            .onExitCommand { editingGroup = nil }
-    }
-
     private func commitGroupName() {
         let name = groupName.trimmingCharacters(in: .whitespaces)
-        switch editingGroup {
-        case .new where !name.isEmpty: groupID = store.createGroup(name).uuidString
-        case .rename(let id) where !name.isEmpty: store.renameGroup(id, to: name)
-        default: break
-        }
-        editingGroup = nil
+        guard !name.isEmpty else { return }
+        if naming == .new { groupID = store.createGroup(name).uuidString } else { store.renameGroup(group.id, to: name) }
     }
 
     private var statusLight: (Color, String) {
