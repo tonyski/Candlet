@@ -258,7 +258,7 @@ struct StockRow: View, Equatable {
                     .lineLimit(1)
                 Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Self.detail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -266,7 +266,8 @@ struct StockRow: View, Equatable {
                 Sparkline(points: spark, slots: stock.sparkSlots, baseline: quote?.prevClose, color: direction.line)
                     .frame(width: 56, height: 24)
 
-                VStack(alignment: .trailing, spacing: 3) {
+                // 两列对齐：价格在价格下方，涨跌幅在胶囊下方（参考富途）
+                VStack(spacing: 3) {
                     HStack(spacing: 8) {
                         Text(Self.price(quote?.last))
                             .font(.system(size: 13, weight: .semibold))
@@ -276,19 +277,22 @@ struct StockRow: View, Equatable {
                             .frame(width: 64, alignment: .trailing)
                         Badge(change: quote?.change, marketCap: marketCap, fill: direction.fill, text: direction.text)
                     }
-                    // 盘前 / 盘后 / 夜盘：参考富途，小字显示在第二行，宽度不超过上一行
                     if let extended = quote?.latestExtended {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 8) {
                             Text(Self.price(extended.last))
-                            Text(Self.percent(extended.change))
-                            Image(systemName: extended.session.icon)
-                                .font(.system(size: 8.5, weight: .medium))
+                                .frame(width: 64, alignment: .trailing)
+                            HStack(spacing: 0) {
+                                Text(Self.percent(extended.change))
+                                Spacer(minLength: 2)
+                                Image(systemName: extended.session.icon)
+                                    .font(.system(size: 8.5, weight: .medium))
+                            }
+                            .frame(width: 62)
                         }
                         .font(.system(size: 10.5))
-                        .foregroundStyle(.primary.opacity(0.6))   // 参考富途：整行统一灰色，红绿只留给主行
+                        .foregroundStyle(Self.detail)   // 参考富途：整行统一灰色，红绿只留给主行
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                        .frame(maxWidth: 134, alignment: .trailing)
                     }
                 }
             }
@@ -298,6 +302,9 @@ struct StockRow: View, Equatable {
         .padding(.horizontal, 8)
         .accessibilityElement(children: .combine)
     }
+
+    /// 第二排文字（代码、市场、延长时段）统一用的灰色
+    static let detail = Color.primary.opacity(0.6)
 
     static func price(_ value: Double?) -> String {
         value?.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--"
