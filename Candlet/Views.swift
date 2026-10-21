@@ -65,7 +65,8 @@ struct WatchlistView: View {
                 Button("新建分组…") { startNaming(.new, "") }
                 if store.groups.count > 1 {
                     Button("重命名分组…") { startNaming(.rename, group.name) }
-                    Button("删除分组", role: .destructive) { store.deleteGroup(group.id) }
+                    let count = group.stocks.count   // 股票会一起删除，写在菜单上
+                    Button(count == 0 ? "删除分组" : "删除分组（含 \(count) 只）", role: .destructive) { store.deleteGroup(group.id) }
                 }
                 Divider()
                 Button("重新连接", action: store.reconnect)
@@ -86,30 +87,30 @@ struct WatchlistView: View {
         .frame(height: 36)
     }
 
-    /// 两个以上分组时显示；文字标签，当前分组加粗
+    /// 两个以上分组、或正在新建分组时显示；当前分组加粗
     private var groupTabs: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 2) {
-                ForEach(store.groups) { item in
-                    let selected = item.id == group.id
-                    if selected, naming == .rename {
-                        nameTab
-                    } else {
-                        let active = selected && naming != .new   // 新建时高亮让给正在编辑的标签
-                        Button(item.name) { groupID = item.id.uuidString }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 12, weight: active ? .semibold : .regular))
-                            .foregroundStyle(active ? .primary : .secondary)
-                            .padding(.horizontal, 8)
-                            .frame(height: 22)
-                            .background(active ? Color.primary.opacity(0.08) : .clear, in: .capsule)
+        ScrollViewReader { scroller in
+            ScrollView(.horizontal) {
+                HStack(spacing: 2) {
+                    ForEach(store.groups) { item in
+                        let selected = item.id == group.id
+                        if selected, naming == .rename {
+                            nameTab
+                        } else {
+                            let active = selected && naming != .new   // 新建时高亮让给正在编辑的标签
+                            Button(item.name) { groupID = item.id.uuidString }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(active ? .primary : .secondary)
+                                .groupTab(active: active)
+                        }
                     }
+                    if naming == .new { nameTab }
                 }
-                if naming == .new { nameTab }
+                .padding(.horizontal, margin - 8)   // 标签自带 8pt 内边距，文字与标题对齐
             }
-            .padding(.horizontal, margin - 8)   // 标签自带 8pt 内边距，文字与标题对齐
+            .scrollIndicators(.never)
+            .onChange(of: naming) { if naming != nil { withAnimation { scroller.scrollTo("naming") } } }
         }
-        .scrollIndicators(.never)
         .padding(.bottom, 6)
     }
 
@@ -117,16 +118,14 @@ struct WatchlistView: View {
     private var nameTab: some View {
         TextField("分组名称", text: $groupName)
             .textFieldStyle(.plain)
-            .font(.system(size: 12, weight: .semibold))
             .fixedSize()
             .focused($nameFocused)
             .onAppear { nameFocused = true }
             .onSubmit(commitGroupName)
             .onExitCommand { naming = nil }
             .onChange(of: nameFocused) { _, focused in if !focused { commitGroupName() } }
-            .padding(.horizontal, 8)
-            .frame(height: 22)
-            .background(Color.primary.opacity(0.08), in: .capsule)
+            .groupTab(active: true)
+            .id("naming")
     }
 
     private func startNaming(_ mode: Naming, _ name: String) {
@@ -444,5 +443,15 @@ extension Color {
             return NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
                            blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
         })
+    }
+}
+
+extension View {
+    /// 分组标签：当前分组加粗并带淡色胶囊
+    func groupTab(active: Bool) -> some View {
+        font(.system(size: 12, weight: active ? .semibold : .regular))
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(active ? Color.primary.opacity(0.08) : .clear, in: .capsule)
     }
 }
