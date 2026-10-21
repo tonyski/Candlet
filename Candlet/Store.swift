@@ -15,7 +15,8 @@ final class Store {
     /// 总股本，乘以最新价得到市值
     private(set) var shares: [String: Double] = [:]
     /// 至少一个分组；旧版的单一列表迁移为第一个分组
-    private(set) var groups: [StockGroup] = Store.load("watchlist") ?? [StockGroup(name: "自选", stocks: Store.load("stocks") ?? [])] {
+    private(set) var groups: [StockGroup] = Store.load("watchlist").flatMap { $0.isEmpty ? nil : $0 }
+        ?? [StockGroup(name: "自选", stocks: Store.load("stocks") ?? [])] {
         didSet {
             Self.save(groups, "watchlist")
             if Set(stocks.map(\.symbol)) != Set(oldValue.flatMap(\.stocks).map(\.symbol)) { sync(); watchCrypto() }

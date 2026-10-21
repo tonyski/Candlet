@@ -20,7 +20,7 @@ final class Binance {
         feed?.cancel()
         guard !symbols.isEmpty else { live = false; return }
 
-        let byWire = Dictionary(uniqueKeysWithValues: symbols.map { (Self.wire($0), $0) })
+        let byWire = Dictionary(symbols.map { (Self.wire($0), $0) }) { first, _ in first }
         let url = URL(string: Self.stream + byWire.keys.sorted().map { $0.lowercased() + "@miniTicker" }.joined(separator: "/"))!
         feed = Task { [weak self] in
             while !Task.isCancelled {
