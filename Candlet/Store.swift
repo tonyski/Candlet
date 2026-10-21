@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 自选列表（存在本机）+ 行情状态。股票走长桥，加密货币走 Binance，价格都靠推送更新，不轮询。
+/// 自选与行情状态：股票走长桥，加密货币走 Binance，都靠推送更新
 @Observable
 final class Store {
     enum Status: Equatable {
@@ -28,7 +28,7 @@ final class Store {
     /// 每次 connect() 自增；被新连接取代的旧连接，失败时不再改状态
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRefresh = Date.distantPast
-    /// 搜索用的证券目录，首次打开添加框时加载；加载完成后界面据此刷新建议
+    /// 搜索用的证券目录，首次打开添加框时加载
     private(set) var catalogReady = false
     @ObservationIgnored private var catalog: [SearchEntry] = []
     @ObservationIgnored private var catalogTask: Task<Void, Never>?
@@ -58,13 +58,12 @@ final class Store {
         Task { await connect() }
     }
 
-    /// 按数据源分流：股票走长桥，加密货币走 Binance
     private var stockSymbols: Set<String> { Set(stocks.map(\.symbol).filter { !Stock.isCrypto($0) }) }
     private var cryptoSymbols: Set<String> { Set(stocks.map(\.symbol).filter(Stock.isCrypto)) }
 
     // MARK: - 编辑自选
 
-    /// 支持 AAPL / 700 / 600660 / 700.HK / BTC/USDT；股票在线时先向长桥校验并取中文名
+    /// 添加前向长桥或 Binance 校验并取名称；长桥未连上时先只存代码
     func add(_ input: String) async throws {
         guard let symbol = Stock.normalize(input) else { return }
         guard !stocks.contains(where: { $0.symbol == symbol }) else { throw AppError("\(symbol) 已在自选里") }
@@ -80,7 +79,7 @@ final class Store {
             } catch is RPCError {
                 throw AppError("找不到 \(symbol)")
             } catch {
-                throw AppError("校验 \(symbol) 失败，请稍后再试")
+                throw AppError("网络异常，请稍后再试")
             }
             guard let found = Self.names(info)[symbol] else { throw AppError("找不到 \(symbol)") }
             name = found
@@ -90,7 +89,7 @@ final class Store {
         }
     }
 
-    /// 拉取 A 股、港股、美股、新加坡证券列表和 Binance USDT 交易对；长桥未连上时下次再试
+    /// A 股、港股、美股、新加坡证券列表 + Binance USDT 交易对；长桥未连上时下次再试
     func loadCatalog() {
         guard catalog.isEmpty, catalogTask == nil else { return }
         catalogTask = Task {
@@ -111,14 +110,14 @@ final class Store {
         }
     }
 
-    /// 模糊匹配建议，排除已在自选里的。在后台线程计算，输入框不卡
+    /// 搜索建议，排除已在自选里的；在后台线程计算
     func suggestions(for input: String) async -> [Stock] {
         let query = input.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty, catalogReady else { return [] }
         return await Self.rank(catalog, query: query, excluding: Set(stocks.map(\.symbol)))
     }
 
-    /// 同一档里名称和代码越短越靠前，窝轮、牛熊证等衍生品自然靠后；只保留最好的几条，不对全部匹配排序
+    /// 同档内名称、代码短者优先，衍生品自然靠后；只保留前几条，不全量排序
     @concurrent
     private static func rank(_ catalog: [SearchEntry], query: String, excluding owned: Set<String>, limit: Int = 6) async -> [Stock] {
         let matcher = SearchEntry.Query(query)
@@ -156,8 +155,7 @@ final class Store {
         }
     }
 
-    /// 面板打开时校正昨收和分时（跨夜后都会变），30 秒内不重复；
-    /// 离线且在退避等待中的话，直接重连，不用等到下一次重试
+    /// 面板打开时刷新昨收和分时（30 秒内不重复）；离线时立即重连
     func panelOpened() {
         if case .offline(_, let needsLogin) = status, !needsLogin { reconnect() }
         guard Date.now.timeIntervalSince(lastRefresh) > 30 else { return }

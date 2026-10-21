@@ -8,7 +8,6 @@ struct WatchlistView: View {
     @State private var input = ""
     @State private var error: String?
     @State private var suggestions: [Stock] = []
-    @State private var highlighted = 0
     @FocusState private var focused: Bool
 
     private let rowHeight: CGFloat = 40
@@ -49,7 +48,7 @@ struct WatchlistView: View {
             Text("Candlet")
                 .font(.system(size: 12, weight: .semibold))
             Spacer()
-            let addTitle = adding ? "取消添加" : "添加自选"
+            let addTitle = adding ? "取消" : "添加"
             Button(addTitle, systemImage: adding ? "xmark" : "plus") {
                 adding ? closeAddField() : openAddField()
             }
@@ -75,7 +74,7 @@ struct WatchlistView: View {
 
     private var statusLight: (Color, String) {
         switch store.status {
-        case .live: (.green, "实时行情已连接")
+        case .live: (.green, "已连接")
         case .connecting: (.orange, "正在连接…")
         case .offline: (.red, "已断开")
         }
@@ -84,15 +83,25 @@ struct WatchlistView: View {
     private var addField: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                TextField("AAPL、700、600660、BTC/USDT…", text: $input)
+                TextField("代码或名称", text: $input)
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.small)
                     .focused($focused)
                     .disabled(checking)
-                    .onSubmit { submit(suggestions.indices.contains(highlighted) ? suggestions[highlighted].symbol : input) }
+                    .onSubmit { submit(input) }
                     .onExitCommand(perform: closeAddField)
-                    .onKeyPress(.downArrow) { moveHighlight(1) }
-                    .onKeyPress(.upArrow) { moveHighlight(-1) }
+                    // 系统补全菜单：↑↓ 选择，回车把代码填入输入框，再回车添加
+                    .textInputSuggestions {
+                        ForEach(suggestions, id: \.symbol) { stock in
+                            HStack {
+                                Text(stock.name)
+                                Spacer()
+                                Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .textInputCompletion(stock.symbol)
+                        }
+                    }
                 if checking {
                     ProgressView().controlSize(.mini)
                 }
@@ -100,42 +109,17 @@ struct WatchlistView: View {
             if let error {
                 Text(error).font(.caption2).foregroundStyle(Color.quoteRed)
             }
-            ForEach(Array(suggestions.enumerated()), id: \.element.symbol) { index, stock in
-                suggestionRow(stock, highlighted: index == highlighted)
-                    .onHover { if $0 { highlighted = index } }
-                    .onTapGesture { submit(stock.symbol) }
-            }
         }
         .padding(.horizontal, margin)
         .padding(.bottom, 10)
         .onAppear(perform: store.loadCatalog)
         .task(id: "\(input)|\(store.catalogReady)") {
             let found = await store.suggestions(for: input)
-            guard !Task.isCancelled else { return }
-            (suggestions, highlighted) = (found, 0)
+            if !Task.isCancelled { suggestions = found }
         }
     }
 
-    private func suggestionRow(_ stock: Stock, highlighted: Bool) -> some View {
-        HStack {
-            Text(stock.name).lineLimit(1)
-            Spacer()
-            Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-        }
-        .font(.system(size: 11.5))
-        .padding(.horizontal, 6)
-        .frame(height: 22)
-        .background(highlighted ? Color.accentColor.opacity(0.18) : .clear, in: .rect(cornerRadius: 5))
-        .contentShape(.rect)
-    }
 
-    private func moveHighlight(_ step: Int) -> KeyPress.Result {
-        guard !suggestions.isEmpty else { return .ignored }
-        highlighted = (highlighted + step + suggestions.count) % suggestions.count
-        return .handled
-    }
 
     private func openAddField() {
         input = ""
@@ -151,7 +135,6 @@ struct WatchlistView: View {
         focused = false
     }
 
-    /// 有建议时添加选中的那条，否则按输入的代码添加
     private func submit(_ text: String) {
         guard !checking, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         checking = true
@@ -171,7 +154,7 @@ struct WatchlistView: View {
     @ViewBuilder
     private var list: some View {
         if store.stocks.isEmpty {
-            Text("点右上角 + 添加自选")
+            Text("点 + 添加自选")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(height: 80)
@@ -248,7 +231,7 @@ struct StockRow: View, Equatable {
         .accessibilityElement(children: .combine)
     }
 
-    /// 涨跌幅放在实心胶囊里，背后的壁纸再花也看得清
+    /// 涨跌幅用实心胶囊，不受背后壁纸影响
     private var direction: (line: Color, price: Color, fill: Color, text: Color) {
         guard let change = quote?.change, change != 0 else { return (.secondary, .primary, .secondary.opacity(0.2), .secondary) }
         return (change > 0) == redUp ? (.quoteRed, .quoteRed, .badgeRed, .white)
@@ -315,7 +298,7 @@ struct Sparkline: View {
     }
 }
 
-/// 面板是半透明玻璃，浅色模式下背后多为浅灰：系统的亮绿、亮红、橙色对比度不足，换成深一档的颜色；深色模式沿用系统色
+/// 面板是半透明玻璃：浅色模式用深一档的红、绿、橙保证对比度，深色模式沿用系统色
 extension Color {
     /// 涨跌胶囊底色，白字对比度 ≥ 4.4:1，深浅模式通用
     static let badgeGreen = Color(red: 0x18 / 255, green: 0x8A / 255, blue: 0x46 / 255)

@@ -13,7 +13,7 @@ final class Binance {
     private static let rest = "https://data-api.binance.vision/api/v3/"
     private static let stream = "wss://data-stream.binance.vision/stream?streams="
 
-    /// 订阅集合变化时重建连接（合并流一条连接即可）；断线 5 秒后重连，Binance 每 24 小时也会主动断开
+    /// 交易对变化时重建连接（合并流，一条即可）；断线 5 秒后重连
     func watch(_ symbols: Set<String>) {
         guard symbols != self.symbols else { return }
         self.symbols = symbols
@@ -53,7 +53,7 @@ final class Binance {
         guard (response as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONDecoder().decode(JSON.self, from: data),
               let quote = Quote(last: j["lastPrice"]?.double, open: j["openPrice"]?.double, time: j["closeTime"]?.date)
-        else { throw AppError("Binance 没有 \(symbol) 交易对") }
+        else { throw AppError("找不到 \(symbol)") }
         return quote
     }
 

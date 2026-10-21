@@ -15,9 +15,8 @@ nonisolated struct Disconnected: LocalizedError {
     let errorDescription: String?
     let needsLogin: Bool
 
-    static let generic = Disconnected(errorDescription: "连接已断开，正在重试…", needsLogin: false)
-    static let login = Disconnected(errorDescription: "未登录或登录已过期，请在终端执行 longbridge auth login，再点「重新连接」",
-                                    needsLogin: true)
+    static let generic = Disconnected(errorDescription: "连接已断开，正在重连…", needsLogin: false)
+    static let login = Disconnected(errorDescription: "登录已失效，请在终端运行 longbridge auth login 后重新连接", needsLogin: true)
 }
 
 /// 管理一个长驻的 `longbridge serve` 子进程：
@@ -54,7 +53,7 @@ actor Serve {
         // 查找 CLI 时 actor 可重入，期间可能已经有别的 start() 把进程起来了
         guard process == nil else { return }
         guard let cli else {
-            throw AppError("未找到 longbridge 命令，请先执行 brew install --cask longbridge/tap/longbridge-terminal")
+            throw AppError("未找到 longbridge，请先安装：brew install --cask longbridge/tap/longbridge-terminal")
         }
 
         let proc = Process()

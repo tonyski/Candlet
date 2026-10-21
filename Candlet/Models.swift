@@ -132,7 +132,7 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
 
 // MARK: - 搜索
 
-/// 证券列表里的一条。代码、名称预先转成小写字节，输入时只做数组比较，几万条也只要几毫秒
+/// 证券目录里的一条，预先转成小写字节，匹配时只做数组比较
 nonisolated struct SearchEntry: Sendable {
     let stock: Stock
     private let code: [UInt8]
