@@ -116,7 +116,7 @@ struct WatchlistView: View {
 
     /// 新建、重命名都直接在标签上编辑：回车或点别处保存，Esc 取消
     private var nameTab: some View {
-        TextField("分组名称", text: $groupName)
+        TextField("分组名称", text: $groupName, prompt: Text("分组名称").foregroundStyle(.tertiary))
             .textFieldStyle(.plain)
             .fixedSize()
             .focused($nameFocused)
