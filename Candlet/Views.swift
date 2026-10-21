@@ -121,6 +121,7 @@ struct WatchlistView: View {
             Text("分组名称").foregroundStyle(.tertiary).opacity(groupName.isEmpty ? 1 : 0)
             TextField("分组名称", text: $groupName, prompt: Text(""))
                 .textFieldStyle(.plain)
+                .foregroundStyle(.primary)
                 .fixedSize()
                 .focused($nameFocused)
                 .onAppear { nameFocused = true }
