@@ -282,9 +282,9 @@ struct StockRow: View, Equatable {
                             Text(Self.price(extended.last))
                                 .frame(width: Self.priceWidth, alignment: .trailing)
                             HStack(spacing: 3) {
+                                Text(Self.percent(extended.change))
                                 Image(systemName: extended.session.icon)
                                     .font(.system(size: 8.5, weight: .medium))
-                                Text(Self.percent(extended.change))
                             }
                             .frame(width: Self.badgeWidth, alignment: .trailing)
                         }
