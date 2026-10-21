@@ -180,8 +180,30 @@ nonisolated struct Quote: Sendable, Equatable {
     var time: Date
     var extended: Extended?
 
+    enum Session: Sendable {
+        case pre, post, overnight
+
+        /// 推送里的 trade_session；常规时段返回 nil
+        init?(_ raw: String?) {
+            switch raw?.lowercased() {
+            case let s? where s.hasPrefix("pre"): self = .pre
+            case let s? where s.hasPrefix("post"): self = .post
+            case let s? where s.hasPrefix("over") || s.hasPrefix("night"): self = .overnight
+            default: return nil
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .pre: "sunrise.fill"
+            case .post: "sunset.fill"
+            case .overnight: "moon.fill"
+            }
+        }
+    }
+
     struct Extended: Sendable, Equatable {
-        var label: String          // 前 / 后 / 夜
+        var session: Session
         var last: Double
         var prevClose: Double
         var time: Date
@@ -204,10 +226,10 @@ nonisolated struct Quote: Sendable, Equatable {
         self.last = last
         prevClose = j["prev_close"]?.double ?? last
         time = j["timestamp"]?.date ?? .distantPast
-        extended = [("前", j["pre_market_quote"]), ("后", j["post_market_quote"]), ("夜", j["overnight_quote"] ?? j["over_night_quote"])]
-            .compactMap { label, leg in
+        extended = [(Session.pre, j["pre_market_quote"]), (.post, j["post_market_quote"]), (.overnight, j["overnight_quote"] ?? j["over_night_quote"])]
+            .compactMap { session, leg in
                 guard let leg, let price = leg["last_done"]?.double, let time = leg["timestamp"]?.date else { return nil }
-                return Extended(label: label, last: price, prevClose: leg["prev_close"]?.double ?? last, time: time)
+                return Extended(session: session, last: price, prevClose: leg["prev_close"]?.double ?? last, time: time)
             }
             .max { $0.time < $1.time }
     }
@@ -216,31 +238,21 @@ nonisolated struct Quote: Sendable, Equatable {
     mutating func apply(_ tick: JSON) -> Bool {
         guard let price = tick["last_done"]?.double else { return false }
         let tickTime = tick["timestamp"]?.date ?? .now
-        guard let label = Self.label(tick["trade_session"]?.string) else {
+        guard let session = Session(tick["trade_session"]?.string) else {
             guard tickTime >= time else { return false }   // 推送可能比快照旧
             let resumed = latestExtended != nil            // 从延长时段回到常规时段，说明是新的交易日
             (last, time) = (price, tickTime)
             return resumed
         }
-        if var current = extended, current.label == label {
+        if var current = extended, current.session == session {
             guard tickTime >= current.time else { return false }
             (current.last, current.time) = (price, tickTime)
             extended = current
             return false
         }
         // 进入新的延长时段：先以常规收盘为参照，再由快照校正
-        extended = Extended(label: label, last: price, prevClose: last, time: tickTime)
+        extended = Extended(session: session, last: price, prevClose: last, time: tickTime)
         return true
-    }
-
-    /// 推送里的交易时段；nil 为常规时段
-    static func label(_ raw: String?) -> String? {
-        switch raw?.lowercased() {
-        case let s? where s.hasPrefix("pre"): "前"
-        case let s? where s.hasPrefix("post"): "后"
-        case let s? where s.hasPrefix("over") || s.hasPrefix("night"): "夜"
-        default: nil
-        }
     }
 }
 

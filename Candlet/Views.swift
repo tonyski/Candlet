@@ -281,10 +281,9 @@ struct StockRow: View, Equatable {
                         HStack(spacing: 4) {
                             Text(Self.price(extended.last))
                             Text(Self.percent(extended.change)).foregroundStyle(color(extended.change))
-                            Text(extended.label)
-                                .font(.system(size: 8.5, weight: .semibold))
-                                .frame(width: 13, height: 13)
-                                .background(.secondary.opacity(0.2), in: .rect(cornerRadius: 3))
+                            Image(systemName: extended.session.icon)
+                                .font(.system(size: 9))
+                                .symbolRenderingMode(.hierarchical)
                         }
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)

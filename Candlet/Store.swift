@@ -281,7 +281,7 @@ final class Store {
         quotes[symbol] = quote
 
         // 正常时段的成交接到分时线末尾，同一分钟内只更新最后一个点；跨日则从新的一天重新开始
-        guard Quote.label(tick["trade_session"]?.string) == nil, var points = sparks[symbol], let last = points.last else { return }
+        guard Quote.Session(tick["trade_session"]?.string) == nil, var points = sparks[symbol], let last = points.last else { return }
         if !Self.utc.isDate(quote.time, inSameDayAs: last.time) {
             points = [SparkPoint(time: quote.time, price: quote.last)]
         } else if quote.time.timeIntervalSince(last.time) < 60 {
