@@ -114,11 +114,11 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
     }
 }
 
-/// 分组只记录代码和顺序，股票本身在「全部」里；一只股票可以属于多个分组
+/// 自选由若干分组组成，默认只有一个
 nonisolated struct StockGroup: Identifiable, Equatable, Codable, Sendable {
     var id = UUID()
     var name: String
-    var symbols: [String] = []
+    var stocks: [Stock] = []
 }
 
 // MARK: - 搜索

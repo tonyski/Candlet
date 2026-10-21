@@ -14,15 +14,15 @@ final class Store {
     private(set) var sparks: [String: [SparkPoint]] = [:]
     /// 总股本，乘以最新价得到市值
     private(set) var shares: [String: Double] = [:]
-    private(set) var stocks: [Stock] = Store.load("stocks") ?? [] {
+    /// 至少一个分组；旧版的单一列表迁移为第一个分组
+    private(set) var groups: [StockGroup] = Store.load("watchlist") ?? [StockGroup(name: "自选", stocks: Store.load("stocks") ?? [])] {
         didSet {
-            Self.save(stocks, "stocks")
-            if Set(stocks.map(\.symbol)) != Set(oldValue.map(\.symbol)) { sync(); watchCrypto() }
+            Self.save(groups, "watchlist")
+            if Set(stocks.map(\.symbol)) != Set(oldValue.flatMap(\.stocks).map(\.symbol)) { sync(); watchCrypto() }
         }
     }
-    private(set) var groups: [StockGroup] = Store.load("groups") ?? [] {
-        didSet { Self.save(groups, "groups") }
-    }
+    /// 所有分组的股票，用于订阅
+    var stocks: [Stock] { groups.flatMap(\.stocks) }
 
     @ObservationIgnored private let serve = Serve()
     @ObservationIgnored private let binance = Binance()
@@ -69,17 +69,8 @@ final class Store {
     // MARK: - 编辑自选
 
     /// 建议都来自证券目录，无需再校验
-    /// 加入「全部」，在分组里添加时同时加入该分组
-    func add(_ stock: Stock, to group: StockGroup.ID?) {
-        if !stocks.contains(where: { $0.symbol == stock.symbol }) { stocks.append(stock) }
-        update(group) { if !$0.symbols.contains(stock.symbol) { $0.symbols.append(stock.symbol) } }
-    }
-
-    /// nil 为全部
-    func stocks(in group: StockGroup.ID?) -> [Stock] {
-        guard let group = groups.first(where: { $0.id == group }) else { return stocks }
-        let bySymbol = Dictionary(uniqueKeysWithValues: stocks.map { ($0.symbol, $0) })
-        return group.symbols.compactMap { bySymbol[$0] }
+    func add(_ stock: Stock, to group: StockGroup.ID) {
+        update(group) { if !$0.stocks.contains(where: { $0.symbol == stock.symbol }) { $0.stocks.append(stock) } }
     }
 
     /// A 股、港股、美股、新加坡证券列表 + Binance USDT 交易对；长桥未连上时下次再试
@@ -104,10 +95,11 @@ final class Store {
     }
 
     /// 搜索建议，排除已在自选里的；在后台线程计算
-    func suggestions(for input: String, in group: StockGroup.ID?) async -> [Stock] {
+    func suggestions(for input: String, in group: StockGroup.ID) async -> [Stock] {
         let query = input.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty, catalogReady else { return [] }
-        return await Self.rank(catalog, query: query, excluding: Set(stocks(in: group).map(\.symbol)))
+        let owned = groups.first { $0.id == group }?.stocks.map(\.symbol) ?? []
+        return await Self.rank(catalog, query: query, excluding: Set(owned))
     }
 
     /// 同档内名称、代码短者优先，衍生品自然靠后；只保留前几条，不全量排序
@@ -126,18 +118,17 @@ final class Store {
         return best.map(\.stock)
     }
 
-    /// 从全部删除，同时移出所有分组
-    func remove(_ stock: Stock) {
-        stocks.removeAll { $0.symbol == stock.symbol }
-        for index in groups.indices { groups[index].symbols.removeAll { $0 == stock.symbol } }
+    func remove(_ stock: Stock, from group: StockGroup.ID) {
+        update(group) { $0.stocks.removeAll { $0.symbol == stock.symbol } }
     }
 
-    func move(from source: IndexSet, to destination: Int, in group: StockGroup.ID?) {
-        if groups.contains(where: { $0.id == group }) {
-            update(group) { $0.symbols.move(fromOffsets: source, toOffset: destination) }
-        } else {
-            stocks.move(fromOffsets: source, toOffset: destination)
-        }
+    func move(from source: IndexSet, to destination: Int, in group: StockGroup.ID) {
+        update(group) { $0.stocks.move(fromOffsets: source, toOffset: destination) }
+    }
+
+    func move(_ stock: Stock, from source: StockGroup.ID, to target: StockGroup.ID) {
+        remove(stock, from: source)
+        add(stock, to: target)
     }
 
     // MARK: - 分组
@@ -150,15 +141,13 @@ final class Store {
 
     func renameGroup(_ id: StockGroup.ID, to name: String) { update(id) { $0.name = name } }
 
-    func deleteGroup(_ id: StockGroup.ID) { groups.removeAll { $0.id == id } }
-
-    func toggle(_ symbol: String, in id: StockGroup.ID) {
-        update(id) { group in
-            if let index = group.symbols.firstIndex(of: symbol) { group.symbols.remove(at: index) } else { group.symbols.append(symbol) }
-        }
+    /// 连同其中的股票一起删除，至少保留一个分组
+    func deleteGroup(_ id: StockGroup.ID) {
+        guard groups.count > 1 else { return }
+        groups.removeAll { $0.id == id }
     }
 
-    private func update(_ id: StockGroup.ID?, _ change: (inout StockGroup) -> Void) {
+    private func update(_ id: StockGroup.ID, _ change: (inout StockGroup) -> Void) {
         if let index = groups.firstIndex(where: { $0.id == id }) { change(&groups[index]) }
     }
 
