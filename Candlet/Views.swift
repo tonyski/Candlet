@@ -281,13 +281,12 @@ struct StockRow: View, Equatable {
                         HStack(spacing: 8) {
                             Text(Self.price(extended.last))
                                 .frame(width: Self.priceWidth, alignment: .trailing)
-                            HStack(spacing: 0) {
-                                Text(Self.percent(extended.change))
-                                Spacer(minLength: 2)
+                            HStack(spacing: 3) {
                                 Image(systemName: extended.session.icon)
                                     .font(.system(size: 8.5, weight: .medium))
+                                Text(Self.percent(extended.change))
                             }
-                            .frame(width: Self.badgeWidth)
+                            .frame(width: Self.badgeWidth, alignment: .trailing)
                         }
                         .font(.system(size: 10.5))
                         .foregroundStyle(Self.detail)   // 参考富途：整行统一灰色，红绿只留给主行
