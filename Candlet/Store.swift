@@ -14,11 +14,14 @@ final class Store {
     private(set) var sparks: [String: [SparkPoint]] = [:]
     /// 总股本，乘以最新价得到市值
     private(set) var shares: [String: Double] = [:]
-    private(set) var stocks: [Stock] = Store.load() {
+    private(set) var stocks: [Stock] = Store.load("stocks") ?? [] {
         didSet {
-            Self.save(stocks)
+            Self.save(stocks, "stocks")
             if Set(stocks.map(\.symbol)) != Set(oldValue.map(\.symbol)) { sync(); watchCrypto() }
         }
+    }
+    private(set) var groups: [StockGroup] = Store.load("groups") ?? [] {
+        didSet { Self.save(groups, "groups") }
     }
 
     @ObservationIgnored private let serve = Serve()
@@ -66,9 +69,17 @@ final class Store {
     // MARK: - 编辑自选
 
     /// 建议都来自证券目录，无需再校验
-    func add(_ stock: Stock) {
-        guard !stocks.contains(where: { $0.symbol == stock.symbol }) else { return }
-        stocks.append(stock)
+    /// 加入「全部」，在分组里添加时同时加入该分组
+    func add(_ stock: Stock, to group: StockGroup.ID?) {
+        if !stocks.contains(where: { $0.symbol == stock.symbol }) { stocks.append(stock) }
+        update(group) { if !$0.symbols.contains(stock.symbol) { $0.symbols.append(stock.symbol) } }
+    }
+
+    /// nil 为全部
+    func stocks(in group: StockGroup.ID?) -> [Stock] {
+        guard let group = groups.first(where: { $0.id == group }) else { return stocks }
+        let bySymbol = Dictionary(uniqueKeysWithValues: stocks.map { ($0.symbol, $0) })
+        return group.symbols.compactMap { bySymbol[$0] }
     }
 
     /// A 股、港股、美股、新加坡证券列表 + Binance USDT 交易对；长桥未连上时下次再试
@@ -93,10 +104,10 @@ final class Store {
     }
 
     /// 搜索建议，排除已在自选里的；在后台线程计算
-    func suggestions(for input: String) async -> [Stock] {
+    func suggestions(for input: String, in group: StockGroup.ID?) async -> [Stock] {
         let query = input.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty, catalogReady else { return [] }
-        return await Self.rank(catalog, query: query, excluding: Set(stocks.map(\.symbol)))
+        return await Self.rank(catalog, query: query, excluding: Set(stocks(in: group).map(\.symbol)))
     }
 
     /// 同档内名称、代码短者优先，衍生品自然靠后；只保留前几条，不全量排序
@@ -115,12 +126,40 @@ final class Store {
         return best.map(\.stock)
     }
 
+    /// 从全部删除，同时移出所有分组
     func remove(_ stock: Stock) {
-        stocks.removeAll { $0 == stock }
+        stocks.removeAll { $0.symbol == stock.symbol }
+        for index in groups.indices { groups[index].symbols.removeAll { $0 == stock.symbol } }
     }
 
-    func move(from source: IndexSet, to destination: Int) {
-        stocks.move(fromOffsets: source, toOffset: destination)
+    func move(from source: IndexSet, to destination: Int, in group: StockGroup.ID?) {
+        if groups.contains(where: { $0.id == group }) {
+            update(group) { $0.symbols.move(fromOffsets: source, toOffset: destination) }
+        } else {
+            stocks.move(fromOffsets: source, toOffset: destination)
+        }
+    }
+
+    // MARK: - 分组
+
+    func createGroup(_ name: String) -> StockGroup.ID {
+        let group = StockGroup(name: name)
+        groups.append(group)
+        return group.id
+    }
+
+    func renameGroup(_ id: StockGroup.ID, to name: String) { update(id) { $0.name = name } }
+
+    func deleteGroup(_ id: StockGroup.ID) { groups.removeAll { $0.id == id } }
+
+    func toggle(_ symbol: String, in id: StockGroup.ID) {
+        update(id) { group in
+            if let index = group.symbols.firstIndex(of: symbol) { group.symbols.remove(at: index) } else { group.symbols.append(symbol) }
+        }
+    }
+
+    private func update(_ id: StockGroup.ID?, _ change: (inout StockGroup) -> Void) {
+        if let index = groups.firstIndex(where: { $0.id == id }) { change(&groups[index]) }
     }
 
     // MARK: - 连接
@@ -314,13 +353,11 @@ final class Store {
 
     // MARK: - 本地存储
 
-    private static func load() -> [Stock] {
-        guard let data = UserDefaults.standard.data(forKey: "stocks"),
-              let stocks = try? JSONDecoder().decode([Stock].self, from: data) else { return [] }
-        return stocks
+    private static func load<T: Decodable>(_ key: String) -> T? {
+        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(T.self, from: $0) }
     }
 
-    private static func save(_ stocks: [Stock]) {
-        UserDefaults.standard.set(try? JSONEncoder().encode(stocks), forKey: "stocks")
+    private static func save(_ value: some Encodable, _ key: String) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(value), forKey: key)
     }
 }

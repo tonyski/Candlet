@@ -7,6 +7,15 @@ struct WatchlistView: View {
     @State private var input = ""
     @State private var suggestions: [Stock] = []
     @FocusState private var focused: Bool
+    @AppStorage("group") private var groupID = ""
+    @State private var editingGroup: GroupEdit?
+    @State private var groupName = ""
+    @FocusState private var naming: Bool
+
+    private enum GroupEdit: Equatable { case new, rename(StockGroup.ID) }
+
+    /// 当前分组，nil 为全部；记住的分组被删掉时也回到全部
+    private var group: StockGroup? { store.groups.first { $0.id.uuidString == groupID } }
 
     private let rowHeight: CGFloat = 40
     /// 面板内容左右边距。List 自带约 8pt 行内边距，行内再补 8pt 对齐到这里
@@ -15,6 +24,7 @@ struct WatchlistView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if !store.groups.isEmpty || editingGroup != nil { groupBar }
             if adding { addField }
             if case .offline(let reason, _) = store.status {
                 Text(reason)
@@ -52,6 +62,7 @@ struct WatchlistView: View {
             }
             .help(addTitle)
             Menu {
+                Button("新建分组") { groupName = ""; editingGroup = .new }
                 Button("重新连接", action: store.reconnect)
                 Toggle("红涨绿跌", isOn: $redUp)
                 Divider()
@@ -68,6 +79,64 @@ struct WatchlistView: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, margin)
         .frame(height: 36)
+    }
+
+    // MARK: - 分组
+
+    /// 有分组时才显示；名称直接在标签栏里编辑
+    private var groupBar: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 2) {
+                groupTab("全部", id: nil)
+                ForEach(store.groups) { item in
+                    if editingGroup == .rename(item.id) {
+                        groupField
+                    } else {
+                        groupTab(item.name, id: item.id)
+                            .contextMenu {
+                                Button("重命名") { groupName = item.name; editingGroup = .rename(item.id) }
+                                Button("删除分组", role: .destructive) { store.deleteGroup(item.id) }
+                            }
+                    }
+                }
+                if editingGroup == .new { groupField }
+            }
+            .padding(.horizontal, margin - 8)
+        }
+        .scrollIndicators(.never)
+        .frame(height: 30)
+    }
+
+    private func groupTab(_ name: String, id: StockGroup.ID?) -> some View {
+        let selected = group?.id == id
+        return Button(name) { groupID = id?.uuidString ?? "" }
+            .buttonStyle(.plain)
+            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+            .foregroundStyle(selected ? .primary : .secondary)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(selected ? Color.primary.opacity(0.08) : .clear, in: .capsule)
+    }
+
+    private var groupField: some View {
+        TextField("分组名称", text: $groupName)
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .frame(width: 96)
+            .focused($naming)
+            .onAppear { naming = true }
+            .onSubmit(commitGroupName)
+            .onExitCommand { editingGroup = nil }
+    }
+
+    private func commitGroupName() {
+        let name = groupName.trimmingCharacters(in: .whitespaces)
+        switch editingGroup {
+        case .new where !name.isEmpty: groupID = store.createGroup(name).uuidString
+        case .rename(let id) where !name.isEmpty: store.renameGroup(id, to: name)
+        default: break
+        }
+        editingGroup = nil
     }
 
     private var statusLight: (Color, String) {
@@ -106,12 +175,12 @@ struct WatchlistView: View {
         .onAppear(perform: store.loadCatalog)
         .onChange(of: input) { _, text in
             if let stock = suggestions.first(where: { $0.symbol == text }) {
-                store.add(stock)
+                store.add(stock, to: group?.id)
                 input = ""
             }
         }
-        .task(id: "\(input)|\(store.catalogReady)") {
-            let found = await store.suggestions(for: input)
+        .task(id: "\(input)|\(store.catalogReady)|\(groupID)") {
+            let found = await store.suggestions(for: input, in: group?.id)
             if !Task.isCancelled { suggestions = found }
         }
     }
@@ -130,14 +199,15 @@ struct WatchlistView: View {
 
     @ViewBuilder
     private var list: some View {
-        if store.stocks.isEmpty {
-            Text("点 + 添加自选")
+        let shown = store.stocks(in: group?.id)
+        if shown.isEmpty {
+            Text(group == nil ? "点 + 添加自选" : "点 + 添加，或在「全部」里右键加入分组")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(height: 80)
         } else {
             List {
-                ForEach(store.stocks) { stock in
+                ForEach(shown) { stock in
                     StockRow(stock: stock, quote: store.quotes[stock.symbol],
                              spark: store.sparks[stock.symbol] ?? [], redUp: redUp,
                              stale: stock.isCrypto ? !store.cryptoLive : store.status != .live,
@@ -146,19 +216,33 @@ struct WatchlistView: View {
                         .frame(height: rowHeight)
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
-                        .contextMenu {
-                            Button("删除", role: .destructive) { store.remove(stock) }
-                        }
+                        .contextMenu { rowMenu(stock) }
                 }
-                .onMove(perform: store.move)
+                .onMove { store.move(from: $0, to: $1, in: group?.id) }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .contentMargins(.vertical, 0, for: .scrollContent)
             .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(CGFloat(store.stocks.count) * rowHeight, 480))
+            .frame(height: min(CGFloat(shown.count) * rowHeight, 480))
             .padding(.vertical, 6)
         }
+    }
+
+    @ViewBuilder
+    private func rowMenu(_ stock: Stock) -> some View {
+        if !store.groups.isEmpty {
+            Menu("分组") {
+                ForEach(store.groups) { item in
+                    Toggle(item.name, isOn: Binding(get: { item.symbols.contains(stock.symbol) },
+                                                    set: { _ in store.toggle(stock.symbol, in: item.id) }))
+                }
+            }
+        }
+        if let group {
+            Button("从「\(group.name)」移除") { store.toggle(stock.symbol, in: group.id) }
+        }
+        Button("删除", role: .destructive) { store.remove(stock) }
     }
 }
 
