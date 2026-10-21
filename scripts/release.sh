@@ -11,6 +11,8 @@ VERSION=$(xcodebuild -project Candlet.xcodeproj -scheme Candlet -configuration R
 DMG=dist/Candlet-$VERSION.dmg
 APP=$BUILD/Build/Products/Release/Candlet.app
 
+scripts/fetch-longbridge.sh
+
 echo "==> 编译 Candlet $VERSION"
 rm -rf $BUILD
 xcodebuild -project Candlet.xcodeproj -scheme Candlet -configuration Release -destination 'generic/platform=macOS' \

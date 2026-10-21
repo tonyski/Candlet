@@ -1,6 +1,6 @@
 import Foundation
 
-/// 通过 GitHub 最新 Release 检查更新：启动时查一次，也可以在 ⋯ 菜单里手动检查
+/// 通过 GitHub 最新 Release 检查更新：启动时和之后每天查一次（菜单栏 App 很少重启），也可以在 ⋯ 菜单里手动检查
 @Observable
 final class Updater {
     enum State: Equatable {
@@ -13,7 +13,14 @@ final class Updater {
 
     private static let latest = URL(string: "https://api.github.com/repos/tonyski/Candlet/releases/latest")!
 
-    init() { check() }
+    init() {
+        Task {
+            while true {
+                check()
+                try? await Task.sleep(for: .seconds(24 * 3600))
+            }
+        }
+    }
 
     /// 检查期间菜单项不可点，不会重复发起
     func check() {

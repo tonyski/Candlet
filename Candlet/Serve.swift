@@ -15,8 +15,8 @@ nonisolated struct Disconnected: LocalizedError {
     let errorDescription: String?
     let needsLogin: Bool
 
-    static let generic = Disconnected(errorDescription: "连接已断开，正在重连…", needsLogin: false)
-    static let login = Disconnected(errorDescription: "登录已失效，请在终端运行 longbridge auth login 后重新连接", needsLogin: true)
+    static let generic = Disconnected(errorDescription: "已断开，稍后自动重连", needsLogin: false)
+    static let login = Disconnected(errorDescription: "未登录长桥", needsLogin: true)
 }
 
 /// 管理一个长驻的 `longbridge serve` 子进程：
@@ -37,7 +37,6 @@ actor Serve {
     /// stderr 由 readabilityHandler 在后台线程写入，退出判断时同步读取，不依赖异步任务的先后
     private nonisolated let stderr = Mutex("")
     private var stderrHandle: FileHandle?
-    private var cli: URL?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -49,15 +48,8 @@ actor Serve {
 
     func start() async throws {
         guard process == nil else { return }
-        if cli == nil { cli = await Self.locateCLI() }
-        // 查找 CLI 时 actor 可重入，期间可能已经有别的 start() 把进程起来了
-        guard process == nil else { return }
-        guard let cli else {
-            throw AppError("未找到 longbridge，请先安装：brew install --cask longbridge/tap/longbridge-terminal")
-        }
-
         let proc = Process()
-        proc.executableURL = cli
+        proc.executableURL = Self.cli
         proc.arguments = ["serve"]
         let stdin = Pipe(), stdout = Pipe(), stderrPipe = Pipe()
         proc.standardInput = stdin
@@ -158,25 +150,36 @@ actor Serve {
         pending.removeAll()
     }
 
-    /// GUI App 拿不到 shell 的 PATH，先查常见安装位置，再用登录 shell 兜底
-    @concurrent
-    private static func locateCLI() async -> URL? {
-        let home = NSHomeDirectory()
-        let known = ["/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin", "\(home)/.longbridge/bin"]
-            .map { "\($0)/longbridge" }
-        if let path = known.first(where: FileManager.default.isExecutableFile(atPath:)) {
-            return URL(filePath: path)
-        }
+    /// 随 App 打包的 CLI，版本由 scripts/fetch-longbridge.sh 固定
+    nonisolated static let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/longbridge")
 
-        let shell = Process()
-        shell.executableURL = URL(filePath: "/bin/zsh")
-        shell.arguments = ["-lc", "command -v longbridge"]
+    /// 运行 `longbridge auth login`（设备码授权）：CLI 自己打开浏览器并轮询，授权完成后退出。
+    /// 输出里的授权链接交给 onURL，浏览器没打开时可以再点；取消任务会结束子进程
+    @MainActor
+    static func login(onURL: (URL) -> Void) async throws {
+        let proc = Process()
+        proc.executableURL = cli
+        proc.arguments = ["auth", "login", "--client-name", "Candlet"]
         let out = Pipe()
-        shell.standardOutput = out
-        guard (try? shell.run()) != nil else { return nil }
-        shell.waitUntilExit()
-        let path = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return FileManager.default.isExecutableFile(atPath: path) ? URL(filePath: path) : nil
+        proc.standardOutput = out
+        proc.standardError = out
+        proc.standardInput = FileHandle.nullDevice
+        let exited = AsyncStream<Int32> { done in
+            proc.terminationHandler = { done.yield($0.terminationStatus); done.finish() }
+        }
+        try proc.run()
+        try await withTaskCancellationHandler {
+            var tail = ""
+            for try await line in out.fileHandleForReading.bytes.lines {
+                if let url = URL(string: line.trimmingCharacters(in: .whitespaces)), url.scheme == "https" { onURL(url) }
+                tail = line
+            }
+            var status: Int32?
+            for await code in exited { status = code }
+            guard !Task.isCancelled else { throw CancellationError() }
+            if status != 0 { throw AppError(tail.isEmpty ? "登录失败" : tail) }
+        } onCancel: {
+            proc.terminate()
+        }
     }
 }

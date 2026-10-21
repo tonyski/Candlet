@@ -8,11 +8,15 @@ struct WatchlistView: View {
     @State private var adding = false
     @State private var input = ""
     @State private var suggestions: [Stock] = []
+    /// suggestions 对应的输入
+    @State private var suggestionsFor = ""
     @FocusState private var focused: Bool
     @AppStorage("group") private var groupID = ""
     @State private var naming: Naming?
     @State private var groupName = ""
     @FocusState private var nameFocused: Bool
+    /// 也可能在系统设置里改，面板打开时重新读取
+    @State private var launchAtLogin = LoginItem.isEnabled
 
     /// 重命名时记下目标分组，保存时不依赖当前选中的是哪个
     private enum Naming: Equatable { case new, rename(StockGroup.ID) }
@@ -29,13 +33,8 @@ struct WatchlistView: View {
             header
             if store.groups.count > 1 || naming == .new { groupTabs }
             if adding { addField }
-            if case .offline(let reason, _) = store.status {
-                Text(reason)
-                    .font(.caption2)
-                    .foregroundStyle(Color.warning)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, margin)
-                    .padding(.bottom, 8)
+            if case .offline(let reason, let needsLogin) = store.status, store.needsLongbridge {
+                if needsLogin { loginCard } else { offlineNotice(reason) }
             }
             Divider()
             list
@@ -45,19 +44,15 @@ struct WatchlistView: View {
         // 某些系统版本上 MenuBarExtra 的 onAppear 只在首次打开时触发，用面板成为 key window 兜底
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             store.panelOpened()
+            launchAtLogin = LoginItem.isEnabled
         }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            let (color, text) = statusLight
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-                .help(text)
-                .accessibilityLabel(text)
             Text("Candlet")
                 .font(.system(size: 12, weight: .semibold))
+            statusIcon
             Spacer()
             let addTitle = adding ? "取消" : "添加"
             Button(addTitle, systemImage: adding ? "xmark" : "plus") {
@@ -65,17 +60,23 @@ struct WatchlistView: View {
             }
             .help(addTitle)
             if case .available(let version, _) = updater.state {
-                Circle().fill(.tint).frame(width: 6, height: 6).help("有新版本 \(version)")   // 不用红色，避免和断线状态灯混淆
+                Circle().fill(.tint).frame(width: 6, height: 6).help("有新版本 \(version)")   // 用强调色，不用红色，免得像涨跌或报错
             }
             Menu {
                 Button("新建分组…") { startNaming(.new, "") }
                 if store.groups.count > 1 {
                     Button("重命名分组…") { startNaming(.rename(group.id), group.name) }
-                    let count = group.stocks.count   // 股票会一起删除，写在菜单上
-                    Button(count == 0 ? "删除分组" : "删除分组（含 \(count) 只）", role: .destructive) { store.deleteGroup(group.id) }
+                    Button(group.stocks.isEmpty ? "删除分组" : "删除分组…", role: .destructive) { confirmDelete(group) }
                 }
                 Divider()
+                if case .offline(_, needsLogin: true) = store.status {
+                    Button("登录长桥…", action: store.logIn)   // 只看币时不显示登录卡片，从这里登录
+                }
                 Button("重新连接", action: store.reconnect)
+                Toggle("登录时打开", isOn: Binding(get: { launchAtLogin }) {
+                    LoginItem.set($0)
+                    launchAtLogin = LoginItem.isEnabled
+                })
                 Toggle("红涨绿跌", isOn: $redUp)
                 Divider()
                 updateItem
@@ -157,59 +158,158 @@ struct WatchlistView: View {
         naming = nil
     }
 
+    /// 空分组直接删；有股票时先确认，因为不能撤销。菜单栏面板里的 SwiftUI 弹窗不可靠，用系统提醒框
+    private func confirmDelete(_ target: StockGroup) {
+        guard !target.stocks.isEmpty else { return store.deleteGroup(target.id) }
+        let alert = NSAlert()
+        alert.messageText = "删除「\(target.name)」？"
+        alert.informativeText = "其中 \(target.stocks.count) 只自选会一并删除。"
+        alert.addButton(withTitle: "删除").hasDestructiveAction = true
+        alert.addButton(withTitle: "取消")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { store.deleteGroup(target.id) }
+    }
+
     @ViewBuilder
     private var updateItem: some View {
         switch updater.state {
         case .checking: Button("正在检查更新…") {}.disabled(true)
-        case .upToDate: Button("已是最新版本 \(updater.current)", action: updater.check)
-        case .failed: Button("检查更新失败，重试", action: updater.check)
-        case .available(let version, let url): Button("下载新版本 \(version)") { openURL(url) }
+        case .upToDate: Button("已是最新版本（\(updater.current)）", action: updater.check)
+        case .failed: Button("检查更新失败，点击重试", action: updater.check)
+        case .available(let version, let url): Button("下载新版本（\(version)）") { openURL(url) }
         }
     }
 
-    private var statusLight: (Color, String) {
+    /// 断线会自动重连，这里只给一个立即重连的入口
+    private func offlineNotice(_ reason: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(reason)
+                .foregroundStyle(Color.warning)
+            Spacer()
+            Button("立即重连", action: store.reconnect)
+                .buttonStyle(.link)
+        }
+        .font(.caption2)
+        .padding(.horizontal, margin)
+        .padding(.bottom, 8)
+    }
+
+    /// 未登录或登录失效：在面板里直接登录，授权在浏览器中完成
+    private var loginCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch store.login {
+            case .idle, .failed:
+                Text("登录长桥，查看股票行情")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("需要开通 OpenAPI 的长桥账户，加密货币无需登录。")
+                    .foregroundStyle(.secondary)
+                if case .failed(let message) = store.login {
+                    Text(message).foregroundStyle(Color.warning)
+                }
+                Button("在浏览器中登录", action: store.logIn)
+                    .buttonStyle(.borderedProminent)
+            case .waiting(let url):
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("请在浏览器中完成授权…")
+                }
+                HStack(spacing: 12) {
+                    if let url { Button("重新打开") { openURL(url) } }
+                    Button("取消", action: store.cancelLogIn)
+                }
+                .buttonStyle(.link)
+            }
+        }
+        .font(.caption)
+        .controlSize(.small)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.primary.opacity(0.05), in: .rect(cornerRadius: 8))
+        .padding(.horizontal, margin)
+        .padding(.bottom, 10)
+    }
+
+    /// 只在异常时出现，靠形状而不只是颜色区分；绿点会和「红涨绿跌」里的跌混淆，正常连接时不显示。
+    /// 只看加密货币时长桥的状态与用户无关，也不显示
+    @ViewBuilder
+    private var statusIcon: some View {
         switch store.status {
-        case .live: (.green, "已连接")
-        case .connecting: (.orange, "正在连接…")
-        case .offline: (.red, "已断开")
+        case .live: EmptyView()
+        case .connecting:
+            ProgressView()
+                .controlSize(.mini)
+                .help("正在连接长桥…")
+                .accessibilityLabel("正在连接长桥")
+        case .offline(_, let needsLogin) where store.needsLongbridge:
+            let text = needsLogin ? "未登录长桥" : "长桥已断开"
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.warning)
+                .help(text)
+                .accessibilityLabel(text)
+        case .offline: EmptyView()
         }
     }
 
     private var addField: some View {
-        HStack(spacing: 6) {
-            TextField("代码或名称", text: $input)
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.small)
-                .focused($focused)
-                .onExitCommand(perform: closeAddField)
-                // 系统补全菜单：选中后代码会填进输入框，这时直接添加
-                .textInputSuggestions {
-                    ForEach(suggestions, id: \.symbol) { stock in
-                        HStack {
-                            Text(stock.name)
-                            Spacer()
-                            Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
-                                .foregroundStyle(.secondary)
-                        }
-                        .textInputCompletion(stock.symbol)
-                    }
-                }
-            if !input.isEmpty, !store.catalogReady {
-                ProgressView().controlSize(.mini)   // 已输入但证券目录还没加载完
+        VStack(alignment: .leading, spacing: 4) {
+            searchField
+            // 没连上长桥时只有加密货币目录，说明一下为什么搜不到股票
+            if !input.isEmpty, !store.stocksSearchable, store.status != .live {
+                Text("连上长桥后可搜索股票")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, margin)
         .padding(.bottom, 10)
         .onAppear(perform: store.loadCatalog)
         .onChange(of: input) { _, text in
-            if let stock = suggestions.first(where: { $0.symbol == text }) {
-                store.add(stock, to: group.id)
-                input = ""
-            }
+            if let stock = suggestions.first(where: { $0.symbol == text }) { add(stock) }
         }
-        .task(id: "\(input)|\(store.catalogReady)|\(groupID)") {
-            let found = await store.suggestions(for: input, in: group.id)
-            if !Task.isCancelled { suggestions = found }
+        .task(id: "\(input)|\(store.catalogSize)|\(groupID)") {
+            let query = input
+            let found = await store.suggestions(for: query, in: group.id)
+            if !Task.isCancelled { (suggestions, suggestionsFor) = (found, query) }
+        }
+    }
+
+    /// 回车添加第一条建议；建议还没跟上输入时不添加，免得加错
+    private func addFirstSuggestion() {
+        guard !input.isEmpty, suggestionsFor == input,
+              let stock = suggestions.first(where: { $0.symbol == input }) ?? suggestions.first else { return }
+        add(stock)
+    }
+
+    private func add(_ stock: Stock) {
+        store.add(stock, to: group.id)
+        input = ""
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            TextField("代码或名称", text: $input)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .focused($focused)
+                .onExitCommand(perform: closeAddField)
+                .onSubmit(addFirstSuggestion)
+                // 系统补全菜单：选中后代码会填进输入框，这时直接添加
+                .textInputSuggestions {
+                    ForEach(suggestions, id: \.symbol) { stock in
+                        HStack {
+                            Text(stock.name)
+                            Spacer()
+                            Text(stock.subtitle)
+                                .foregroundStyle(.secondary)
+                        }
+                        .textInputCompletion(stock.symbol)
+                    }
+                }
+            if !input.isEmpty, store.catalogLoading {
+                ProgressView().controlSize(.mini)   // 已输入但证券目录还没加载完
+            }
         }
     }
 
@@ -288,7 +388,7 @@ struct StockRow: View, Equatable {
                 Text(stock.name)
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
-                Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
+                Text(stock.subtitle)
                     .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(Self.detail)
             }
@@ -307,7 +407,7 @@ struct StockRow: View, Equatable {
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)   // 小价格币的有效数字较长
                             .frame(width: Self.priceWidth, alignment: .trailing)
-                        Badge(change: quote?.change, marketCap: marketCap, fill: direction.fill, text: direction.text)
+                        Badge(change: quote?.change, marketCap: marketCap, currency: stock.currency, fill: direction.fill, text: direction.text)
                     }
                     if let extended = quote?.latestExtended {
                         HStack(spacing: 8) {
@@ -317,6 +417,8 @@ struct StockRow: View, Equatable {
                                 Text(Self.percent(extended.change))
                                 Image(systemName: extended.session.icon)
                                     .font(.system(size: 8.5, weight: .medium))
+                                    .help(extended.session.name)
+                                    .accessibilityLabel(extended.session.name)
                             }
                             .frame(width: Self.badgeWidth, alignment: .trailing)
                         }
@@ -332,18 +434,31 @@ struct StockRow: View, Equatable {
         }
         .padding(.horizontal, 8)
         .accessibilityElement(children: .combine)
+        .help(tooltip)
+    }
+
+    /// 收盘后、断线时价格不再跳动，悬停能看到是什么时候的价格
+    private var tooltip: String {
+        // 加密货币的涨跌是 24 小时滚动的，和股票的当日涨跌不同
+        let prefix = stock.isCrypto ? "24 小时涨跌幅，" : ""
+        guard let time = quote?.latestExtended?.time ?? quote?.time, time > .distantPast else { return prefix + "暂无行情" }
+        let shown = Calendar.current.isDateInToday(time) ? time.formatted(date: .omitted, time: .standard)
+                                                         : time.formatted(.dateTime.month().day().hour().minute())
+        return "\(prefix)更新于 \(shown)"
     }
 
     /// 第二排文字（代码、市场、延长时段）统一用的灰色
     static let detail = Color.primary.opacity(0.6)
     /// 价格列与胶囊列，第二行按这两列对齐
-    static let priceWidth: CGFloat = 64
+    static let priceWidth: CGFloat = 72
     static let badgeWidth: CGFloat = 62
 
     /// 1 以下按有效数字显示，PEPE 之类的小价格币不会变成 0.00
+    /// 五位数以上加千分位（BTC 108,234.56），四位数以内不加，和行情软件习惯一致
     static func price(_ value: Double?) -> String {
         guard let value else { return "--" }
-        return value.formatted(.number.precision(value < 1 ? .significantDigits(2...4) : .fractionLength(2...3)).grouping(.never))
+        return value.formatted(.number.precision(value < 1 ? .significantDigits(2...4) : .fractionLength(2...3))
+            .grouping(value >= 10_000 ? .automatic : .never))
     }
 
     static func percent(_ value: Double) -> String {
@@ -362,12 +477,14 @@ struct StockRow: View, Equatable {
 struct Badge: View {
     let change: Double?
     let marketCap: Double?
+    /// 市值的币种符号；nil 表示加密货币，没有市值，始终显示 24 小时涨跌幅
+    let currency: String?
     let fill: Color
     let text: Color
     @AppStorage("showMarketCap") private var showMarketCap = false
 
     var body: some View {
-        Text((showMarketCap ? marketCap.map(Self.compact) : change.map(StockRow.percent)) ?? "--")
+        label
             .font(.system(size: 12, weight: .semibold))
             .lineLimit(1)
             .minimumScaleFactor(0.75)
@@ -377,6 +494,14 @@ struct Badge: View {
             .contentShape(.rect)
             .onTapGesture { showMarketCap.toggle() }
             .help(showMarketCap ? "市值，点击显示涨跌幅" : "涨跌幅，点击显示市值")
+            .allowsHitTesting(currency != nil)   // 加密货币没有市值，点击不切换
+    }
+
+    /// 币种符号缩小一号，HK$ 这类长符号不会把数字挤小
+    private var label: Text {
+        guard showMarketCap, let currency else { return Text(change.map(StockRow.percent) ?? "--") }
+        guard let marketCap else { return Text("--") }
+        return Text("\(Text(currency).font(.system(size: 9.5, weight: .semibold)))\(Self.compact(marketCap))")
     }
 
     /// 4.94万亿、1334亿、12.3亿

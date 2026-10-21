@@ -39,10 +39,16 @@ final class Store {
     /// 每次 connect() 自增；被新连接取代的旧连接，失败时不再改状态
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRefresh = Date.distantPast
-    /// 搜索用的证券目录，首次打开添加框时加载
-    private(set) var catalogReady = false
-    @ObservationIgnored private var catalog: [SearchEntry] = []
-    @ObservationIgnored private var catalogTask: Task<Void, Never>?
+    /// 搜索用的证券目录，首次打开添加框时加载。币与股票分开加载，没连上长桥也能搜币
+    private var stockCatalog: [SearchEntry] = []
+    private var cryptoCatalog: [SearchEntry] = []
+    private var stockCatalogTask: Task<Void, Never>?
+    private var cryptoCatalogTask: Task<Void, Never>?
+    @ObservationIgnored private var catalogWanted = false
+    var catalogLoading: Bool { stockCatalogTask != nil || cryptoCatalogTask != nil }
+    var stocksSearchable: Bool { !stockCatalog.isEmpty }
+    /// 目录变化时搜索建议要重算
+    var catalogSize: Int { stockCatalog.count + cryptoCatalog.count }
 
     /// 各市场常规时段都落在同一个 UTC 日内，用它判断分时是否跨日
     private static let utc: Calendar = {
@@ -79,42 +85,47 @@ final class Store {
         update(group) { if !$0.stocks.contains(where: { $0.symbol == stock.symbol }) { $0.stocks.append(stock) } }
     }
 
-    /// A 股、港股、美股、新加坡证券列表 + Binance USDT 交易对；长桥未连上时下次再试
+    /// Binance USDT 交易对随时可加载；A 股、港股、美股、新加坡证券列表要等长桥连上，连上后自动补上。失败的部分下次再试
     func loadCatalog() {
-        guard catalog.isEmpty, catalogTask == nil else { return }
-        catalogTask = Task {
-            defer { catalogTask = nil }
-            guard status == .live else { return }
-            async let crypto = Binance.usdtPairs()
-            var entries: [SearchEntry] = []
-            for market in ["CN", "HK", "US", "SG"] {
-                guard let list = try? await serve.call("quote.security_list", ["market": .string(market)]) else { return }
-                entries += list.list().compactMap { item in
-                    // 5 位港股代码是窝轮、牛熊证和人民币 / 美元柜台，搜索里用不到
-                    guard let symbol = item["symbol"]?.string, !(market == "HK" && symbol.count == 8) else { return nil }
-                    let name = [item["name_cn"], item["name_hk"], item["name_en"]].compactMap { $0?.string }.first { !$0.isEmpty }
-                    return SearchEntry(symbol: symbol, name: name ?? symbol, english: item["name_en"]?.string ?? "")
-                }
+        catalogWanted = true
+        if cryptoCatalog.isEmpty, cryptoCatalogTask == nil {
+            cryptoCatalogTask = Task {
+                cryptoCatalog = await Binance.usdtPairs()
+                cryptoCatalogTask = nil
             }
-            catalog = entries + (await crypto)
-            catalogReady = true
+        }
+        if stockCatalog.isEmpty, stockCatalogTask == nil, status == .live {
+            stockCatalogTask = Task {
+                defer { stockCatalogTask = nil }
+                var entries: [SearchEntry] = []
+                for market in ["CN", "HK", "US", "SG"] {
+                    guard let list = try? await serve.call("quote.security_list", ["market": .string(market)]) else { return }
+                    entries += list.list().compactMap { item in
+                        // 5 位港股代码是窝轮、牛熊证和人民币 / 美元柜台，搜索里用不到
+                        guard let symbol = item["symbol"]?.string, !(market == "HK" && symbol.count == 8) else { return nil }
+                        let name = [item["name_cn"], item["name_hk"], item["name_en"]].compactMap { $0?.string }.first { !$0.isEmpty }
+                        return SearchEntry(symbol: symbol, name: name ?? symbol, english: item["name_en"]?.string ?? "")
+                    }
+                }
+                stockCatalog = entries
+            }
         }
     }
 
     /// 搜索建议，排除已在自选里的；在后台线程计算
     func suggestions(for input: String, in group: StockGroup.ID) async -> [Stock] {
         let query = input.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !query.isEmpty, catalogReady else { return [] }
+        guard !query.isEmpty, catalogSize > 0 else { return [] }
         let owned = groups.first { $0.id == group }?.stocks.map(\.symbol) ?? []
-        return await Self.rank(catalog, query: query, excluding: Set(owned))
+        return await Self.rank([stockCatalog, cryptoCatalog], query: query, excluding: Set(owned))
     }
 
     /// 同档内名称、代码短者优先，衍生品自然靠后；只保留前几条，不全量排序
     @concurrent
-    private static func rank(_ catalog: [SearchEntry], query: String, excluding owned: Set<String>, limit: Int = 6) async -> [Stock] {
+    private static func rank(_ catalogs: [[SearchEntry]], query: String, excluding owned: Set<String>, limit: Int = 6) async -> [Stock] {
         let matcher = SearchEntry.Query(query)
         var best: [(rank: (Int, Int, Int), stock: Stock)] = []
-        for (index, entry) in catalog.enumerated() {
+        for (index, entry) in catalogs.joined().enumerated() {
             if index % 2000 == 0, Task.isCancelled { return [] }   // 继续输入时放弃这一轮
             guard let score = entry.score(matcher), !owned.contains(entry.stock.symbol) else { continue }
             let rank = (score, entry.stock.name.utf8.count, entry.stock.symbol.utf8.count)
@@ -158,6 +169,39 @@ final class Store {
         if let index = groups.firstIndex(where: { $0.id == id }) { change(&groups[index]) }
     }
 
+    // MARK: - 登录
+
+    /// App 内登录：waiting 带着授权页链接（拿到之前为 nil），浏览器没自动打开时给用户点
+    enum Login { case idle, waiting(URL?), failed(String) }
+    private(set) var login = Login.idle
+    @ObservationIgnored private var loginTask: Task<Void, Never>?
+
+    /// 自选为空或含股票时才需要长桥；只看加密货币的用户不必被登录提示打扰
+    var needsLongbridge: Bool { stocks.isEmpty || !stockSymbols.isEmpty }
+
+    /// 授权在浏览器里完成，面板关掉也会继续等；成功后重连
+    func logIn() {
+        loginTask?.cancel()
+        login = .waiting(nil)
+        loginTask = Task {
+            do {
+                // 取消后旧进程可能还会吐出链接，不能把状态改回等待
+                try await Serve.login { url in if !Task.isCancelled { login = .waiting(url) } }
+                login = .idle
+                reconnect()
+            } catch is CancellationError {
+            } catch {
+                login = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func cancelLogIn() {
+        loginTask?.cancel()
+        loginTask = nil
+        login = .idle
+    }
+
     // MARK: - 连接
 
     func reconnect() {
@@ -197,6 +241,7 @@ final class Store {
             retryDelay = Self.minRetryDelay
             lastRefresh = .now
             sync()   // 连接期间增删的自选在这里补上
+            if catalogWanted { loadCatalog() }   // 打开过添加框，补上股票目录
         } catch {
             guard current == generation else { return }
             fail(error)

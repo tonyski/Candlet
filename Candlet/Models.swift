@@ -102,6 +102,20 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
         }
     }
 
+    /// 名称下面那行：700 · 港股
+    var subtitle: String { [code, market].compactMap { $0 }.joined(separator: " · ") }
+
+    /// 市值的币种符号；加密货币没有市值
+    var currency: String? {
+        switch suffix {
+        case "HK": "HK$"
+        case "US": "$"
+        case "SH", "SZ": "¥"
+        case "SG": "S$"
+        default: nil
+        }
+    }
+
     /// 加密货币分时：最近 24 小时的 5 分钟 K 线
     static let cryptoSlots = 288
 
@@ -201,6 +215,15 @@ nonisolated struct Quote: Sendable, Equatable {
             case .pre: "sunrise"
             case .post: "sunset"
             case .overnight: "moon"
+            }
+        }
+
+        /// 图标的悬停提示与读屏文字
+        var name: String {
+            switch self {
+            case .pre: "盘前"
+            case .post: "盘后"
+            case .overnight: "夜盘"
             }
         }
     }
