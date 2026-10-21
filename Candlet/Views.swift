@@ -90,7 +90,7 @@ struct WatchlistView: View {
                     .disabled(checking)
                     .onSubmit { submit(input) }
                     .onExitCommand(perform: closeAddField)
-                    // 系统补全菜单：↑↓ 选择，回车把代码填入输入框，再回车添加
+                    // 系统补全菜单：选中后代码会填进输入框，这时直接添加
                     .textInputSuggestions {
                         ForEach(suggestions, id: \.symbol) { stock in
                             HStack {
@@ -113,6 +113,9 @@ struct WatchlistView: View {
         .padding(.horizontal, margin)
         .padding(.bottom, 10)
         .onAppear(perform: store.loadCatalog)
+        .onChange(of: input) { _, text in
+            if suggestions.contains(where: { $0.symbol == text }) { submit(text) }
+        }
         .task(id: "\(input)|\(store.catalogReady)") {
             let found = await store.suggestions(for: input)
             if !Task.isCancelled { suggestions = found }
