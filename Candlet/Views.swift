@@ -282,8 +282,7 @@ struct StockRow: View, Equatable {
                             Text(Self.price(extended.last))
                             Text(Self.percent(extended.change)).foregroundStyle(color(extended.change))
                             Image(systemName: extended.session.icon)
-                                .font(.system(size: 8.5))
-                                .foregroundStyle(.tertiary)
+                                .font(.system(size: 8.5, weight: .medium))
                         }
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
