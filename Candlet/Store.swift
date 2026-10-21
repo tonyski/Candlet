@@ -122,13 +122,8 @@ final class Store {
         update(group) { $0.stocks.removeAll { $0.symbol == stock.symbol } }
     }
 
-    /// 拖到某一行上：往下拖放在它后面，往上拖放在它前面
-    func reorder(_ symbol: String, onto target: String, in group: StockGroup.ID) {
-        update(group) { group in
-            guard let from = group.stocks.firstIndex(where: { $0.symbol == symbol }),
-                  let to = group.stocks.firstIndex(where: { $0.symbol == target }), from != to else { return }
-            group.stocks.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
-        }
+    func move(from source: IndexSet, to destination: Int, in group: StockGroup.ID) {
+        update(group) { $0.stocks.move(fromOffsets: source, toOffset: destination) }
     }
 
     func move(_ stock: Stock, from source: StockGroup.ID, to target: StockGroup.ID) {

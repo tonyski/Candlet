@@ -18,7 +18,7 @@ struct WatchlistView: View {
     private var group: StockGroup { store.groups.first { $0.id.uuidString == groupID } ?? store.groups[0] }
 
     private let rowHeight: CGFloat = 40
-    /// 面板内容左右边距；列表行的悬停背景占用其中一半
+    /// 面板内容左右边距。List 自带约 8pt 行内边距，行内再补 8pt 对齐到这里
     private let margin: CGFloat = 16
 
     var body: some View {
@@ -207,27 +207,23 @@ struct WatchlistView: View {
                 .foregroundStyle(.secondary)
                 .frame(height: 80)
         } else {
-            // 不用 List：它右键时会画蓝色高亮框，行内边距也不可控。拖放排序用 draggable / dropDestination
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(shown) { stock in
-                        StockRow(stock: stock, quote: store.quotes[stock.symbol],
-                                 spark: store.sparks[stock.symbol] ?? [], redUp: redUp,
-                                 stale: stock.isCrypto ? !store.cryptoLive : store.status != .live,
-                                 marketCap: store.quotes[stock.symbol].flatMap { quote in store.shares[stock.symbol].map { $0 * quote.last } })
-                            .modifier(HoverHighlight())
-                            .frame(height: rowHeight)
-                            .contextMenu { rowMenu(stock) }
-                            .draggable(stock.symbol)
-                            .dropDestination(for: String.self) { symbols, _ in
-                                guard let symbol = symbols.first else { return false }
-                                withAnimation(.snappy) { store.reorder(symbol, onto: stock.symbol, in: group.id) }
-                                return true
-                            }
-                    }
+            List {
+                ForEach(shown) { stock in
+                    StockRow(stock: stock, quote: store.quotes[stock.symbol],
+                             spark: store.sparks[stock.symbol] ?? [], redUp: redUp,
+                             stale: stock.isCrypto ? !store.cryptoLive : store.status != .live,
+                             marketCap: store.quotes[stock.symbol].flatMap { quote in store.shares[stock.symbol].map { $0 * quote.last } })
+                        .modifier(HoverHighlight())
+                        .frame(height: rowHeight)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .contextMenu { rowMenu(stock) }
                 }
-                .padding(.horizontal, margin / 2)
+                .onMove { store.move(from: $0, to: $1, in: group.id) }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.vertical, 0, for: .scrollContent)
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: min(CGFloat(shown.count) * rowHeight, 480))
             .padding(.vertical, 6)
