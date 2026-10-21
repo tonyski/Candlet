@@ -177,27 +177,26 @@ struct StockRow: View, Equatable {
                 Text(stock.name)
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
-                Text("\(stock.code) · \(stock.market)")
+                Text([stock.code, stock.market, quote?.session].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
-                Sparkline(points: spark, baseline: quote?.baseline, color: color)
+                Sparkline(points: spark, baseline: quote?.baseline, color: direction.line)
                     .frame(width: 60, height: 22)
 
-                VStack(alignment: .trailing, spacing: 1) {
+                VStack(alignment: .trailing, spacing: 2) {
                     Text(quote?.last.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--")
                         .font(.system(size: 12.5, weight: .semibold))
-                    HStack(spacing: 3) {
-                        if let session = quote?.session {
-                            Text(session).foregroundStyle(.secondary)
-                        }
-                        Text(quote?.change.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always())) ?? "--")
-                            .foregroundStyle(color)
-                    }
-                    .font(.system(size: 10.5, weight: .semibold))
+                    Text(quote?.change.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always())) ?? "--")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .foregroundStyle(direction.text)
+                        .frame(width: 58, height: 16)
+                        .background(direction.fill, in: .rect(cornerRadius: 4))
                 }
                 .monospacedDigit()
                 .frame(width: 72, alignment: .trailing)
@@ -208,9 +207,10 @@ struct StockRow: View, Equatable {
         .accessibilityElement(children: .combine)
     }
 
-    private var color: Color {
-        guard let change = quote?.change, change != 0 else { return .secondary }
-        return (change > 0) == redUp ? .quoteRed : .quoteGreen
+    /// 涨跌幅放在实心胶囊里，背后的壁纸再花也看得清
+    private var direction: (line: Color, fill: Color, text: Color) {
+        guard let change = quote?.change, change != 0 else { return (.secondary, .secondary.opacity(0.2), .secondary) }
+        return (change > 0) == redUp ? (.quoteRed, .badgeRed, .white) : (.quoteGreen, .badgeGreen, .white)
     }
 }
 
@@ -269,6 +269,10 @@ struct Sparkline: View {
 
 /// 面板是半透明玻璃，浅色模式下背后多为浅灰：系统的亮绿、亮红、橙色对比度不足，换成深一档的颜色；深色模式沿用系统色
 extension Color {
+    /// 涨跌胶囊底色，白字对比度 ≥ 4.4:1，深浅模式通用
+    static let badgeGreen = Color(red: 0x18 / 255, green: 0x8A / 255, blue: 0x46 / 255)
+    static let badgeRed = Color(red: 0xD1 / 255, green: 0x3A / 255, blue: 0x3A / 255)
+
     static let quoteGreen = adaptive(light: 0x0E_7C_3A, dark: 0x30_D1_58)
     static let quoteRed = adaptive(light: 0xC8_2B_2B, dark: 0xFF_6B_6B)
     static let warning = adaptive(light: 0x9E_50_00, dark: 0xFF_B3_40)
