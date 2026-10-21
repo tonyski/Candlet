@@ -78,14 +78,18 @@ nonisolated extension JSON: ExpressibleByStringLiteral, ExpressibleByArrayLitera
 // MARK: - 自选
 
 nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
-    let symbol: String   // 700.HK / AAPL.US / 600660.SH
+    let symbol: String   // 700.HK / AAPL.US / 600660.SH / BTC/USDT
     var name: String
     var id: String { symbol }
 
     var code: String { String(symbol[..<(symbol.lastIndex(of: ".") ?? symbol.endIndex)]) }
 
+    var isCrypto: Bool { Self.isCrypto(symbol) }
+    static func isCrypto(_ symbol: String) -> Bool { symbol.contains("/") }
+
     var market: String? {
-        switch symbol.split(separator: ".").last {
+        if isCrypto { return "加密" }
+        return switch symbol.split(separator: ".").last {
         case "HK": "港股"
         case "US": "美股"
         case "SH": "沪市"
@@ -95,9 +99,13 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
         }
     }
 
-    /// 常规时段每天的分钟数（分时数据每分钟一个点，不含午休），用作分时图横轴的总长度
-    var tradingMinutes: Int {
-        switch symbol.split(separator: ".").last {
+    /// 加密货币分时：最近 24 小时的 5 分钟 K 线
+    static let cryptoSlots = 288
+
+    /// 分时图横轴的总点数：股票为常规时段每天的分钟数（每分钟一个点，不含午休）
+    var sparkSlots: Int {
+        if isCrypto { return Self.cryptoSlots }
+        return switch symbol.split(separator: ".").last {
         case "US": 390     // 9:30–16:00
         case "HK": 330     // 9:30–12:00, 13:00–16:00
         case "SG": 420     // 9:00–12:00, 13:00–17:00
@@ -105,10 +113,11 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
         }
     }
 
-    /// AAPL → AAPL.US，700 / 00700 → 700.HK，600660 → 600660.SH，000001 → 000001.SZ
+    /// AAPL → AAPL.US，700 / 00700 → 700.HK，600660 → 600660.SH，000001 → 000001.SZ，btc/usdt → BTC/USDT
     static func normalize(_ raw: String) -> String? {
         let text = raw.trimmingCharacters(in: .whitespaces).uppercased()
         guard !text.isEmpty else { return nil }
+        if text.wholeMatch(of: /[A-Z0-9]{2,12}\/[A-Z0-9]{2,12}/) != nil { return text }
         if let suffix = text.split(separator: ".").last, ["HK", "US", "SH", "SZ", "SG"].contains(suffix), text.contains(".") {
             guard suffix == "HK" else { return text }
             let code = text.dropLast(3).drop { $0 == "0" }
@@ -133,6 +142,12 @@ nonisolated struct Quote: Sendable, Equatable {
     var baseline: Double
 
     var change: Double { prevClose == 0 ? 0 : last / prevClose - 1 }
+
+    /// 加密货币：相对 24 小时前的开盘价
+    init?(last: Double?, open: Double?, time: Date?) {
+        guard let last, let open, let time else { return nil }
+        (self.last, prevClose, baseline, self.time, session) = (last, open, open, time, nil)
+    }
 
     /// 快照里有正常时段和盘前 / 盘后 / 夜盘几组价格，取最新成交的那组
     init?(snapshot j: JSON) {

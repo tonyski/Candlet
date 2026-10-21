@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 自选列表（存在本机）+ 行情状态。价格靠推送更新，不轮询。
+/// 自选列表（存在本机）+ 行情状态。股票走长桥，加密货币走 Binance，价格都靠推送更新，不轮询。
 @Observable
 final class Store {
     enum Status: Equatable {
@@ -9,16 +9,18 @@ final class Store {
     }
 
     private(set) var status: Status = .connecting
+    private(set) var cryptoLive = false
     private(set) var quotes: [String: Quote] = [:]
     private(set) var sparks: [String: [SparkPoint]] = [:]
     private(set) var stocks: [Stock] = Store.load() {
         didSet {
             Self.save(stocks)
-            if Set(stocks.map(\.symbol)) != Set(oldValue.map(\.symbol)) { sync() }
+            if Set(stocks.map(\.symbol)) != Set(oldValue.map(\.symbol)) { sync(); watchCrypto() }
         }
     }
 
     @ObservationIgnored private let serve = Serve()
+    @ObservationIgnored private let binance = Binance()
     @ObservationIgnored private var subscribed: Set<String> = []
     @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var retryTask: Task<Void, Never>?
@@ -46,18 +48,28 @@ final class Store {
                 }
             }
         }
+        binance.onQuote = { [weak self] in self?.applyCrypto($0, $1) }
+        binance.onLive = { [weak self] in self?.cryptoLive = $0 }
+        watchCrypto()
         Task { await connect() }
     }
 
+    /// 按数据源分流：股票走长桥，加密货币走 Binance
+    private var stockSymbols: Set<String> { Set(stocks.map(\.symbol).filter { !Stock.isCrypto($0) }) }
+    private var cryptoSymbols: Set<String> { Set(stocks.map(\.symbol).filter(Stock.isCrypto)) }
+
     // MARK: - 编辑自选
 
-    /// 支持 AAPL / 700 / 600660 / 700.HK；在线时先向长桥校验并取中文名
+    /// 支持 AAPL / 700 / 600660 / 700.HK / BTC/USDT；股票在线时先向长桥校验并取中文名
     func add(_ input: String) async throws {
         guard let symbol = Stock.normalize(input) else { return }
         guard !stocks.contains(where: { $0.symbol == symbol }) else { throw AppError("\(symbol) 已在自选里") }
 
         var name = symbol
-        if status == .live {
+        if Stock.isCrypto(symbol) {
+            quotes[symbol] = try await Binance.quote(symbol)
+            name = String(symbol.prefix { $0 != "/" })
+        } else if status == .live {
             let info: JSON
             do {
                 info = try await serve.call("quote.static_info", ["symbols": .strings([symbol])])
@@ -99,16 +111,13 @@ final class Store {
     /// 面板打开时校正昨收和分时（跨夜后都会变），30 秒内不重复；
     /// 离线且在退避等待中的话，直接重连，不用等到下一次重试
     func panelOpened() {
-        switch status {
-        case .connecting:
-            return
-        case .offline(_, let needsLogin):
-            if !needsLogin { reconnect() }
-        case .live:
-            guard Date.now.timeIntervalSince(lastRefresh) > 30 else { return }
-            lastRefresh = .now
-            let symbols = Set(stocks.map(\.symbol))
-            Task { await reload(symbols) }
+        if case .offline(_, let needsLogin) = status, !needsLogin { reconnect() }
+        guard Date.now.timeIntervalSince(lastRefresh) > 30 else { return }
+        lastRefresh = .now
+        let (stocks, crypto) = (stockSymbols, cryptoSymbols)
+        Task {
+            await loadCryptoSparks(crypto)
+            if status == .live { await reload(stocks) }
         }
     }
 
@@ -119,7 +128,7 @@ final class Store {
         do {
             try await serve.start()
             subscribed = []
-            try await subscribe(Set(stocks.map(\.symbol)))
+            try await subscribe(stockSymbols)
             guard current == generation else { return }
             status = .live
             retryDelay = Self.minRetryDelay
@@ -160,7 +169,7 @@ final class Store {
         syncTask = Task {
             await previous?.value
             guard status == .live else { return }
-            let wanted = Set(stocks.map(\.symbol))
+            let wanted = stockSymbols
             let removed = subscribed.subtracting(wanted)
             if !removed.isEmpty {
                 _ = try? await serve.call("quote.unsubscribe", ["symbols": .strings(removed)])
@@ -237,9 +246,41 @@ final class Store {
         }
     }
 
+    // MARK: - 加密货币
+
+    /// 自选里的交易对变化时更新 Binance 订阅，新加的拉一次分时
+    private func watchCrypto() {
+        let wanted = cryptoSymbols
+        let previous = binance.symbols
+        binance.watch(wanted)
+        for symbol in previous.subtracting(wanted) { quotes[symbol] = nil; sparks[symbol] = nil }
+        let added = wanted.subtracting(previous)
+        if !added.isEmpty { Task { await loadCryptoSparks(added) } }
+    }
+
+    private func loadCryptoSparks(_ symbols: Set<String>) async {
+        for symbol in symbols {
+            let points = await Binance.sparks(symbol)
+            if !points.isEmpty { sparks[symbol] = points }
+        }
+    }
+
+    /// 每秒一条 24 小时滚动价格：同一根 5 分钟 K 线内更新最后一个点，否则追加并只保留最近 24 小时
+    private func applyCrypto(_ symbol: String, _ quote: Quote) {
+        quotes[symbol] = quote
+        guard var points = sparks[symbol], let last = points.last else { return }
+        if quote.time.timeIntervalSince(last.time) < 300 {
+            points[points.count - 1].price = quote.last
+        } else {
+            points.append(SparkPoint(time: quote.time, price: quote.last))
+            points.removeFirst(max(0, points.count - Stock.cryptoSlots))
+        }
+        sparks[symbol] = points
+    }
+
     /// 离线时添加的只有代码，连上后补全名称
     private func refreshNames() async {
-        guard let result = try? await serve.call("quote.static_info", ["symbols": .strings(stocks.map(\.symbol))])
+        guard let result = try? await serve.call("quote.static_info", ["symbols": .strings(stockSymbols)])
         else { return }
         let names = Self.names(result)
         let renamed = stocks.map { Stock(symbol: $0.symbol, name: names[$0.symbol] ?? $0.name) }

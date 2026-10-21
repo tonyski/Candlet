@@ -44,7 +44,7 @@ struct WatchlistView: View {
                 .frame(width: 6, height: 6)
                 .help(text)
                 .accessibilityLabel(text)
-            Text("自选")
+            Text("Candlet")
                 .font(.system(size: 12, weight: .semibold))
             Spacer()
             let addTitle = adding ? "取消添加" : "添加自选"
@@ -82,7 +82,7 @@ struct WatchlistView: View {
     private var addField: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                TextField("AAPL、700、600660…", text: $input)
+                TextField("AAPL、700、600660、BTC/USDT…", text: $input)
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.small)
                     .focused($focused)
@@ -140,11 +140,11 @@ struct WatchlistView: View {
                 .foregroundStyle(.secondary)
                 .frame(height: 80)
         } else {
-            let stale = store.status != .live
             List {
                 ForEach(store.stocks) { stock in
                     StockRow(stock: stock, quote: store.quotes[stock.symbol],
-                             spark: store.sparks[stock.symbol] ?? [], redUp: redUp, stale: stale)
+                             spark: store.sparks[stock.symbol] ?? [], redUp: redUp,
+                             stale: stock.isCrypto ? !store.cryptoLive : store.status != .live)
                         .modifier(HoverHighlight())
                         .frame(height: rowHeight)
                         .listRowInsets(EdgeInsets())
@@ -187,7 +187,7 @@ struct StockRow: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
-                Sparkline(points: spark, slots: stock.tradingMinutes, baseline: quote?.baseline, color: direction.line)
+                Sparkline(points: spark, slots: stock.sparkSlots, baseline: quote?.baseline, color: direction.line)
                     .frame(width: 56, height: 24)
 
                 Text(quote?.last.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--")

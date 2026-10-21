@@ -1,10 +1,10 @@
 # Candlet
 
-macOS 菜单栏自选股。行情来自[长桥 OpenAPI](https://open.longbridge.com)，实时推送。
+macOS 菜单栏自选股。股票行情来自[长桥 OpenAPI](https://open.longbridge.com)，加密货币来自 [Binance](https://developers.binance.com/docs/binance-spot-api-docs) 公开行情，都是实时推送。
 
 ## 功能
 
-- 港股、美股、A 股、新加坡股自选，拖动排序，右键删除
+- 港股、美股、A 股、新加坡股和加密货币自选，拖动排序，右键删除
 - 实时价格与涨跌幅，自动切换盘前 / 盘中 / 盘后 / 夜盘
 - 分时小图，带昨收虚线
 - 红涨绿跌 / 绿涨红跌可切换
@@ -23,7 +23,7 @@ macOS 菜单栏自选股。行情来自[长桥 OpenAPI](https://open.longbridge.
 
 ## 使用
 
-点右上角 **+** 输入代码，添加时会向长桥校验并取回名称：
+点右上角 **+** 输入代码，添加时会向长桥或 Binance 校验：
 
 | 输入 | 识别为 |
 | --- | --- |
@@ -32,6 +32,7 @@ macOS 菜单栏自选股。行情来自[长桥 OpenAPI](https://open.longbridge.
 | `600660`（6、5、9 开头） | 沪市 `600660.SH` |
 | `000001`（其他 6 位数字） | 深市 `000001.SZ` |
 | `D05.SG` | 新加坡股，需带后缀 |
+| `BTC/USDT` | Binance 现货交易对，涨跌为 24 小时 |
 
 自选保存在本机，与长桥 App 的自选互不影响。
 
@@ -49,6 +50,7 @@ macOS 菜单栏自选股。行情来自[长桥 OpenAPI](https://open.longbridge.
 | --- | --- |
 | `CandletApp.swift` | 入口，菜单栏面板 |
 | `Serve.swift` | 管理 `longbridge serve` 子进程，JSON-RPC 收发 |
+| `Binance.swift` | 加密货币行情：WebSocket 推送、K 线 |
 | `Store.swift` | 自选存储、订阅、推送合并、断线重连 |
 | `Models.swift` | JSON、自选代码规范化、报价 |
 | `Views.swift` | 面板、行、分时小图 |
