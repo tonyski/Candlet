@@ -172,60 +172,73 @@ nonisolated struct SearchEntry: Sendable {
 
 // MARK: - 报价
 
+/// 常规时段价格，外加最近一次延长时段（盘前 / 盘后 / 夜盘）的价格
 nonisolated struct Quote: Sendable, Equatable {
     var last: Double
+    /// 昨收，也是分时图的虚线
     var prevClose: Double
     var time: Date
-    /// nil 为正常交易时段，否则是「盘前 / 盘后 / 夜盘」
-    var session: String?
-    /// 走势图的昨收虚线
-    var baseline: Double
+    var extended: Extended?
+
+    struct Extended: Sendable, Equatable {
+        var label: String          // 盘前 / 盘后 / 24h
+        var last: Double
+        var prevClose: Double
+        var time: Date
+        var change: Double { prevClose == 0 ? 0 : last / prevClose - 1 }
+    }
 
     var change: Double { prevClose == 0 ? 0 : last / prevClose - 1 }
+
+    /// 比常规时段更新的延长时段成交，用于第二行显示
+    var latestExtended: Extended? { extended.flatMap { $0.time > time ? $0 : nil } }
 
     /// 加密货币：相对 24 小时前的开盘价
     init?(last: Double?, open: Double?, time: Date?) {
         guard let last, let open, let time else { return nil }
-        (self.last, prevClose, baseline, self.time, session) = (last, open, open, time, nil)
+        (self.last, prevClose, self.time, extended) = (last, open, time, nil)
     }
 
-    /// 快照里有正常时段和盘前 / 盘后 / 夜盘几组价格，取最新成交的那组
     init?(snapshot j: JSON) {
-        guard let regularClose = j["last_done"]?.double else { return nil }
-        let legs: [(String?, JSON?)] = [(nil, j), ("盘前", j["pre_market_quote"]),
-                                        ("盘后", j["post_market_quote"]), ("夜盘", j["overnight_quote"] ?? j["over_night_quote"])]
-        let latest = legs
-            .compactMap { label, leg -> (String?, Double, Double?, Date)? in
-                guard let leg, let last = leg["last_done"]?.double,
-                      let time = leg["timestamp"]?.date ?? (label == nil ? Date.distantPast : nil) else { return nil }
-                return (label, last, leg["prev_close"]?.double, time)
-            }
-            .max { $0.3 < $1.3 }
-        guard let (label, last, prev, time) = latest else { return nil }
-
+        guard let last = j["last_done"]?.double else { return nil }
         self.last = last
-        self.time = time
-        self.session = label
-        self.baseline = j["prev_close"]?.double ?? regularClose
-        // 盘前盘后相对上一个收盘价
-        self.prevClose = prev ?? (label == nil ? baseline : regularClose)
+        prevClose = j["prev_close"]?.double ?? last
+        time = j["timestamp"]?.date ?? .distantPast
+        extended = [("盘前", j["pre_market_quote"]), ("盘后", j["post_market_quote"]), ("24h", j["overnight_quote"] ?? j["over_night_quote"])]
+            .compactMap { label, leg in
+                guard let leg, let price = leg["last_done"]?.double, let time = leg["timestamp"]?.date else { return nil }
+                return Extended(label: label, last: price, prevClose: leg["prev_close"]?.double ?? last, time: time)
+            }
+            .max { $0.time < $1.time }
     }
 
     /// 合并一条 quote.updated 推送；返回 true 表示进入了新时段，需要重新拉快照校正昨收
     mutating func apply(_ tick: JSON) -> Bool {
         guard let price = tick["last_done"]?.double else { return false }
         let tickTime = tick["timestamp"]?.date ?? .now
-        guard tickTime >= time else { return false }   // 推送可能比快照旧
-        let tickSession = Self.label(tick["trade_session"]?.string)
-        defer { last = price; time = tickTime; session = tickSession }
-        return tickSession != session
+        guard let label = Self.label(tick["trade_session"]?.string) else {
+            guard tickTime >= time else { return false }   // 推送可能比快照旧
+            let resumed = latestExtended != nil            // 从延长时段回到常规时段，说明是新的交易日
+            (last, time) = (price, tickTime)
+            return resumed
+        }
+        if var current = extended, current.label == label {
+            guard tickTime >= current.time else { return false }
+            (current.last, current.time) = (price, tickTime)
+            extended = current
+            return false
+        }
+        // 进入新的延长时段：先以常规收盘为参照，再由快照校正
+        extended = Extended(label: label, last: price, prevClose: last, time: tickTime)
+        return true
     }
 
-    private static func label(_ raw: String?) -> String? {
+    /// 推送里的交易时段；nil 为常规时段
+    static func label(_ raw: String?) -> String? {
         switch raw?.lowercased() {
         case let s? where s.hasPrefix("pre"): "盘前"
         case let s? where s.hasPrefix("post"): "盘后"
-        case let s? where s.hasPrefix("over") || s.hasPrefix("night"): "夜盘"
+        case let s? where s.hasPrefix("over") || s.hasPrefix("night"): "24h"
         default: nil
         }
     }

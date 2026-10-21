@@ -17,7 +17,7 @@ struct WatchlistView: View {
     /// 当前分组；记住的分组被删掉时回到第一个
     private var group: StockGroup { store.groups.first { $0.id.uuidString == groupID } ?? store.groups[0] }
 
-    private let rowHeight: CGFloat = 40
+    private let rowHeight: CGFloat = 44
     /// 面板内容左右边距。List 自带约 8pt 行内边距，行内再补 8pt 对齐到这里
     private let margin: CGFloat = 16
 
@@ -256,30 +256,59 @@ struct StockRow: View, Equatable {
                 Text(stock.name)
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
-                Text([stock.code, stock.market, quote?.session].compactMap { $0 }.joined(separator: " · "))
+                Text([stock.code, stock.market].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
-                Sparkline(points: spark, slots: stock.sparkSlots, baseline: quote?.baseline, color: direction.line)
+                Sparkline(points: spark, slots: stock.sparkSlots, baseline: quote?.prevClose, color: direction.line)
                     .frame(width: 56, height: 24)
 
-                Text(quote?.last.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(direction.price)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: 64, alignment: .trailing)
-
-                Badge(change: quote?.change, marketCap: marketCap, fill: direction.fill, text: direction.text)
+                VStack(alignment: .trailing, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(Self.price(quote?.last))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(direction.price)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(width: 64, alignment: .trailing)
+                        Badge(change: quote?.change, marketCap: marketCap, fill: direction.fill, text: direction.text)
+                    }
+                    // 盘前 / 盘后 / 夜盘：参考富途，小字显示在第二行
+                    if let extended = quote?.latestExtended {
+                        HStack(spacing: 4) {
+                            Text(Self.price(extended.last))
+                            Text(Self.percent(extended.change)).foregroundStyle(color(extended.change))
+                            Text(extended.label)
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .padding(.horizontal, 3)
+                                .padding(.vertical, 1)
+                                .background(.secondary.opacity(0.2), in: .rect(cornerRadius: 3))
+                        }
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    }
+                }
             }
             .monospacedDigit()
             .opacity(stale ? 0.45 : 1)
         }
         .padding(.horizontal, 8)
         .accessibilityElement(children: .combine)
+    }
+
+    static func price(_ value: Double?) -> String {
+        value?.formatted(.number.precision(.fractionLength(2...3)).grouping(.never)) ?? "--"
+    }
+
+    static func percent(_ value: Double) -> String {
+        value.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always()))
+    }
+
+    private func color(_ change: Double) -> Color {
+        change == 0 ? .secondary : (change > 0) == redUp ? .quoteRed : .quoteGreen
     }
 
     /// 涨跌幅用实心胶囊，不受背后壁纸影响
@@ -299,7 +328,7 @@ struct Badge: View {
     @AppStorage("showMarketCap") private var showMarketCap = false
 
     var body: some View {
-        Text((showMarketCap ? marketCap.map(Self.compact) : change?.formatted(.percent.precision(.fractionLength(2)).sign(strategy: .always()))) ?? "--")
+        Text((showMarketCap ? marketCap.map(Self.compact) : change.map(StockRow.percent)) ?? "--")
             .font(.system(size: 12, weight: .semibold))
             .lineLimit(1)
             .minimumScaleFactor(0.75)
