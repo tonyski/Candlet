@@ -10,6 +10,7 @@ struct WatchlistView: View {
     @AppStorage("group") private var groupID = ""
     @State private var naming: Naming?
     @State private var groupName = ""
+    @FocusState private var nameFocused: Bool
 
     private enum Naming { case new, rename }
 
@@ -33,6 +34,7 @@ struct WatchlistView: View {
                 .padding(.bottom, 8)
             }
             if adding { addField }
+            if naming != nil { nameField }
             if case .offline(let reason, _) = store.status {
                 Text(reason)
                     .font(.caption2)
@@ -45,12 +47,6 @@ struct WatchlistView: View {
             list
         }
         .frame(width: 360)
-        .alert(naming == .new ? "新建分组" : "重命名分组",
-               isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
-            TextField("名称", text: $groupName)
-            Button("取消", role: .cancel) {}
-            Button("好", action: commitGroupName)
-        }
         .onAppear(perform: store.panelOpened)
         // 某些系统版本上 MenuBarExtra 的 onAppear 只在首次打开时触发，用面板成为 key window 兜底
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
@@ -75,9 +71,9 @@ struct WatchlistView: View {
             }
             .help(addTitle)
             Menu {
-                Button("新建分组…") { groupName = ""; naming = .new }
+                Button("新建分组…") { startNaming(.new, "") }
                 if store.groups.count > 1 {
-                    Button("重命名分组…") { groupName = group.name; naming = .rename }
+                    Button("重命名分组…") { startNaming(.rename, group.name) }
                     Button("删除分组", role: .destructive) { store.deleteGroup(group.id) }
                 }
                 Divider()
@@ -99,10 +95,31 @@ struct WatchlistView: View {
         .frame(height: 36)
     }
 
+    /// 与搜索框同一位置的一行输入：回车确认，Esc 取消
+    private var nameField: some View {
+        TextField(naming == .new ? "新分组名称" : "分组名称", text: $groupName)
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .focused($nameFocused)
+            .onAppear { nameFocused = true }
+            .onSubmit(commitGroupName)
+            .onExitCommand { naming = nil }
+            .padding(.horizontal, margin)
+            .padding(.bottom, 10)
+    }
+
+    private func startNaming(_ mode: Naming, _ name: String) {
+        closeAddField()
+        groupName = name
+        naming = mode
+    }
+
     private func commitGroupName() {
         let name = groupName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        if naming == .new { groupID = store.createGroup(name).uuidString } else { store.renameGroup(group.id, to: name) }
+        if !name.isEmpty {
+            if naming == .new { groupID = store.createGroup(name).uuidString } else { store.renameGroup(group.id, to: name) }
+        }
+        naming = nil
     }
 
     private var statusLight: (Color, String) {
@@ -152,6 +169,7 @@ struct WatchlistView: View {
     }
 
     private func openAddField() {
+        naming = nil
         input = ""
         adding = true
         focused = true
