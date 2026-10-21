@@ -251,7 +251,6 @@ final class Store {
     // MARK: - 本地存储
 
     private static func load() -> [Stock] {
-        migrateFromStockBar()
         guard let data = UserDefaults.standard.data(forKey: "stocks"),
               let stocks = try? JSONDecoder().decode([Stock].self, from: data) else { return [] }
         return stocks
@@ -259,15 +258,5 @@ final class Store {
 
     private static func save(_ stocks: [Stock]) {
         UserDefaults.standard.set(try? JSONEncoder().encode(stocks), forKey: "stocks")
-    }
-
-    /// 从改名前的 bundle id（local.stockbar.StockBar）迁移自选和涨跌配色
-    private static func migrateFromStockBar() {
-        let defaults = UserDefaults.standard
-        guard defaults.object(forKey: "stocks") == nil,
-              let old = UserDefaults(suiteName: "local.stockbar.StockBar") else { return }
-        for key in ["stocks", "redUp"] {
-            if let value = old.object(forKey: key) { defaults.set(value, forKey: key) }
-        }
     }
 }

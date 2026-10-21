@@ -84,14 +84,14 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
 
     var code: String { String(symbol[..<(symbol.lastIndex(of: ".") ?? symbol.endIndex)]) }
 
-    var market: String {
+    var market: String? {
         switch symbol.split(separator: ".").last {
         case "HK": "港股"
         case "US": "美股"
         case "SH": "沪市"
         case "SZ": "深市"
         case "SG": "新加坡"
-        default: ""
+        default: nil
         }
     }
 

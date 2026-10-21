@@ -96,7 +96,7 @@ actor Serve {
         proc?.terminate()
     }
 
-    func call(_ method: String, _ params: JSON? = nil) async throws -> JSON {
+    func call(_ method: String, _ params: JSON) async throws -> JSON {
         guard let input else { throw AppError("未连接") }
         nextID += 1
         let id = nextID
