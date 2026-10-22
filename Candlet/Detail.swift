@@ -54,6 +54,12 @@ struct StockDetail: View {
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
             Spacer()
+            // 数据来源：切换长桥行情时在这里确认
+            if let source = quote?.source {
+                Text(source)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(height: 36)
     }
@@ -72,7 +78,7 @@ struct StockDetail: View {
                 }
                 Spacer()
                 if let time = quote?.time, time > .distantPast {
-                    Text(time.formatted(date: .omitted, time: .standard))
+                    Text(StockRow.updated(time))
                         .font(.caption2)
                         .foregroundStyle(Color.secondary)
                 }
@@ -92,8 +98,13 @@ struct StockDetail: View {
             } else {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        } else if let points = store.sparks[stock.symbol], points.count > 1 {
+            Sparkline(points: points, slots: stock.sparkSlots, baseline: quote?.prevClose, color: tint)
         } else {
-            Sparkline(points: store.sparks[stock.symbol] ?? [], slots: stock.sparkSlots, baseline: quote?.prevClose, color: tint)
+            Text("暂无数据")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -204,10 +215,12 @@ struct CandleChart: View {
         }
     }
 
-    /// 日 K 约三个月，标月日；周 K、月 K 跨年，标年月
+    /// 日 K 约三个月，标月日；周 K、月 K 跨年，标年月；年 K 只标年
     private func label(_ time: Date) -> String {
-        period != .day
-            ? time.formatted(.verbatim("\(year: .defaultDigits)/\(month: .twoDigits)", timeZone: .current, calendar: .current))
-            : time.formatted(.verbatim("\(month: .twoDigits)/\(day: .twoDigits)", timeZone: .current, calendar: .current))
+        switch period {
+        case .day: time.formatted(.verbatim("\(month: .twoDigits)/\(day: .twoDigits)", timeZone: .current, calendar: .current))
+        case .week, .month: time.formatted(.verbatim("\(year: .defaultDigits)/\(month: .twoDigits)", timeZone: .current, calendar: .current))
+        case .year: time.formatted(.verbatim("\(year: .defaultDigits)", timeZone: .current, calendar: .current))
+        }
     }
 }

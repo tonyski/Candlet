@@ -200,6 +200,8 @@ nonisolated struct Quote: Sendable, Equatable {
     var prevClose: Double
     var time: Date
     var extended: Extended?
+    /// 数据来源，显示在详情页右上角：长桥、腾讯、新浪、Yahoo、Binance
+    var source: String
 
     enum Session: Sendable {
         case pre, post, overnight
@@ -246,14 +248,14 @@ nonisolated struct Quote: Sendable, Equatable {
     var latestExtended: Extended? { extended.flatMap { $0.time > time ? $0 : nil } }
 
     /// 只有常规时段价格，用于免费行情
-    init(last: Double, prevClose: Double, time: Date) {
-        (self.last, self.prevClose, self.time, extended) = (last, prevClose, time, nil)
+    init(last: Double, prevClose: Double, time: Date, source: String) {
+        (self.last, self.prevClose, self.time, extended, self.source) = (last, prevClose, time, nil, source)
     }
 
     /// 加密货币：相对 24 小时前的开盘价
     init?(last: Double?, open: Double?, time: Date?) {
         guard let last, let open, let time else { return nil }
-        self.init(last: last, prevClose: open, time: time)
+        self.init(last: last, prevClose: open, time: time, source: "Binance")
     }
 
     init?(snapshot j: JSON) {
@@ -261,6 +263,7 @@ nonisolated struct Quote: Sendable, Equatable {
         self.last = last
         prevClose = j["prev_close"]?.double ?? last
         time = j["timestamp"]?.date ?? .distantPast
+        source = "长桥"
         extended = [(Session.pre, j["pre_market_quote"]), (.post, j["post_market_quote"]), (.overnight, j["overnight_quote"] ?? j["over_night_quote"])]
             .compactMap { session, leg in
                 guard let leg, let price = leg["last_done"]?.double, let time = leg["timestamp"]?.date else { return nil }
@@ -298,14 +301,24 @@ nonisolated struct SparkPoint: Equatable, Sendable {
 
 // MARK: - K 线
 
+nonisolated extension Calendar {
+    /// 公历 + UTC：Binance 的 K 线按 UTC 划分，分时跨日也按 UTC 判断
+    static let utc: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        return calendar
+    }()
+}
+
 nonisolated enum KPeriod: String, CaseIterable, Sendable {
-    case day, week, month
+    case day, week, month, year
 
     var title: String {
         switch self {
         case .day: "日K"
         case .week: "周K"
         case .month: "月K"
+        case .year: "年K"
         }
     }
 }
@@ -316,6 +329,23 @@ nonisolated struct Candle: Sendable {
 
     /// 详情页每个周期加载的根数，图上显示其中一段，拖动翻看
     static let loadCount = 200
+}
+
+nonisolated extension [Candle] {
+    /// 把月 K 按年合并成年 K，供没有年 K 的数据源使用；calendar 用交易所时区，月初、月末的时间不会算到相邻年份
+    func yearly(in calendar: Calendar) -> [Candle] {
+        var years: [Candle] = []
+        for bar in self {
+            guard var year = years.last, calendar.isDate(year.time, equalTo: bar.time, toGranularity: .year) else {
+                years.append(bar)
+                continue
+            }
+            (year.high, year.low, year.close) = (Swift.max(year.high, bar.high), Swift.min(year.low, bar.low), bar.close)
+            year.volume += bar.volume
+            years[years.count - 1] = year
+        }
+        return years
+    }
 }
 
 nonisolated extension Candle {

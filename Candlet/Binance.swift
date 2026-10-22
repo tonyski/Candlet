@@ -52,14 +52,15 @@ final class Binance {
         await klines(symbol, interval: "5m", limit: Stock.cryptoSlots).map { SparkPoint(time: $0.time, price: $0.close) }
     }
 
-    /// 详情页的日、周、月 K 线
+    /// 详情页的日、周、月、年 K 线；Binance 没有年 K，用月 K 按年（UTC）合并
     static func candles(_ symbol: String, _ period: KPeriod) async -> [Candle] {
         let interval = switch period {
         case .day: "1d"
         case .week: "1w"
-        case .month: "1M"
+        case .month, .year: "1M"
         }
-        return await klines(symbol, interval: interval, limit: Candle.loadCount)
+        let bars = await klines(symbol, interval: interval, limit: Candle.loadCount)
+        return period == .year ? bars.yearly(in: .utc) : bars
     }
 
     /// 每根形如 [开盘时间, 开, 高, 低, 收, 量, …]

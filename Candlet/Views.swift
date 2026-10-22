@@ -68,7 +68,7 @@ struct WatchlistView: View {
         header
         if store.groups.count > 1 || naming == .new { groupTabs }
         if adding { addField }
-        if case .offline(let reason, let needsLogin) = store.status, store.needsLongbridge {
+        if case .offline(let reason, let needsLogin) = store.status {
             if needsLogin { loginCard } else { offlineNotice(reason) }
         }
         Divider()
@@ -79,7 +79,7 @@ struct WatchlistView: View {
         HStack(spacing: 10) {
             Text("Candlet")
                 .font(.system(size: 12, weight: .semibold))
-            statusIcon
+            longbridgeStatus
             Spacer()
             let addTitle = adding ? "取消" : "添加"
             Button(addTitle, systemImage: adding ? "xmark" : "plus") {
@@ -96,18 +96,8 @@ struct WatchlistView: View {
                     Button(group.stocks.isEmpty ? "删除分组" : "删除分组…", role: .destructive) { confirmDelete(group) }
                 }
                 Divider()
-                if case .offline(_, needsLogin: true) = store.status {
-                    Button("登录长桥…", action: store.logIn)   // 只看币时不显示登录卡片，从这里登录
-                }
                 @Bindable var store = store
-                Picker("行情来源", selection: $store.source) {
-                    Text("自动（优先长桥）").tag(Store.Source.auto)
-                    Text("只用长桥").tag(Store.Source.longbridge)
-                    Text("只用免费行情").tag(Store.Source.free)
-                }
-                if store.source != .free {
-                    Button("重新连接", action: store.reconnect)
-                }
+                Toggle("使用长桥行情", isOn: $store.longbridge)
                 Toggle("登录时打开", isOn: Binding(get: { launchAtLogin }) {
                     LoginItem.set($0)
                     launchAtLogin = LoginItem.isEnabled
@@ -277,8 +267,7 @@ struct WatchlistView: View {
             case .idle, .failed:
                 Text("登录长桥，查看实时行情")
                     .font(.system(size: 12, weight: .semibold))
-                Text(store.source == .auto ? "现在显示的是免费延迟行情。实时行情需要已开通 OpenAPI 的长桥账户。"
-                                           : "需要已开通 OpenAPI 的长桥账户；加密货币无需登录。")
+                Text("需要已开通 OpenAPI 的长桥账户")
                     .foregroundStyle(.secondary)
                 if case .failed(let message) = store.login {
                     Text(message).foregroundStyle(Color.warning)
@@ -286,8 +275,7 @@ struct WatchlistView: View {
                 HStack(spacing: 12) {
                     Button("在浏览器中登录", action: store.logIn)
                         .buttonStyle(.borderedProminent)
-                    // 没有长桥账户的用户，从这里关掉登录提示
-                    Button("只用免费行情") { store.source = .free }
+                    Button("不连接") { store.longbridge = false }
                         .buttonStyle(.link)
                 }
             case .waiting(let url):
@@ -312,42 +300,23 @@ struct WatchlistView: View {
         .padding(.bottom, 10)
     }
 
-    /// 用免费行情时标「延迟」，否则显示长桥的连接状态
-    @ViewBuilder
-    private var statusIcon: some View {
-        if store.usingFree, store.hasStocks {
-            Text("延迟")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(Color.warning)
-                .padding(.horizontal, 5)
-                .frame(height: 16)
-                .background(Color.warning.opacity(0.12), in: .capsule)
-                .help(store.source == .free ? "免费延迟行情，来自腾讯、Yahoo"
-                                            : "长桥不可用，暂用免费延迟行情（腾讯、Yahoo）")
-        } else {
-            longbridgeStatus
-        }
-    }
-
-    /// 只在异常时出现，靠形状而不只是颜色区分；绿点会和「红涨绿跌」里的跌混淆，正常连接时不显示。
-    /// 只看加密货币时长桥的状态与用户无关，也不显示
+    /// 只在异常时出现，靠形状而不只是颜色区分；绿点会和「红涨绿跌」里的跌混淆，正常连接时不显示
     @ViewBuilder
     private var longbridgeStatus: some View {
         switch store.status {
-        case .live: EmptyView()
+        case .off, .live: EmptyView()
         case .connecting:
             ProgressView()
                 .controlSize(.mini)
                 .help("正在连接长桥…")
                 .accessibilityLabel("正在连接长桥")
-        case .offline(_, let needsLogin) where store.needsLongbridge:
+        case .offline(_, let needsLogin):
             let text = needsLogin ? "未登录长桥" : "长桥已断开"
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
                 .foregroundStyle(Color.warning)
                 .help(text)
                 .accessibilityLabel(text)
-        case .offline: EmptyView()
         }
     }
 
@@ -421,7 +390,7 @@ struct WatchlistView: View {
     private var list: some View {
         let shown = group.stocks
         if shown.isEmpty {
-            Text("点 + 添加自选")
+            Text("点 + 添加自选，如「腾讯」「AAPL」「BTC」")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(height: 80)
@@ -545,10 +514,14 @@ struct StockRow: View, Equatable {
         // 加密货币的涨跌是 24 小时滚动的，和股票的当日涨跌不同
         let prefix = stock.isCrypto ? "24 小时涨跌幅，" : ""
         guard let time = quote?.latestExtended?.time ?? quote?.time, time > .distantPast else { return prefix + "暂无行情" }
-        let shown = Calendar.current.isDateInToday(time) ? time.formatted(date: .omitted, time: .standard)
-                                                         : time.formatted(.dateTime.month().day().hour().minute())
         let original = stock.alias == nil ? "" : "\n原名：\(stock.name)"
-        return "\(prefix)更新于 \(shown)\(original)"
+        return "\(prefix)\(Self.updated(time))\(original)"
+    }
+
+    /// 更新于 15:42:39；不是今天的带上日期，免得把昨天的收盘价当成刚更新的
+    static func updated(_ time: Date) -> String {
+        "更新于 " + (Calendar.current.isDateInToday(time) ? time.formatted(date: .omitted, time: .standard)
+                                                         : time.formatted(.dateTime.month().day().hour().minute()))
     }
 
     /// 第二排文字（代码、市场、延长时段）统一用的灰色

@@ -1,33 +1,31 @@
 import SwiftUI
 
-/// 自选与行情状态：股票走长桥（不可用时可退到免费延迟行情），加密货币走 Binance
+/// 自选与行情状态：股票默认走免费行情，连接长桥后改用长桥推送（长桥不可用时退回免费行情），加密货币走 Binance
 @Observable
 final class Store {
     enum Status: Equatable {
+        /// 没连接长桥
+        case off
         case connecting, live
         case offline(String, needsLogin: Bool)
     }
 
-    /// 股票行情来源：自动时长桥断开或未登录就用免费行情，连上后切回长桥
-    enum Source: String { case auto, longbridge, free }
-
-    var source = Source(rawValue: UserDefaults.standard.string(forKey: "source") ?? "") ?? .auto {
+    /// 用户主动连接了长桥；没连接时不启动长桥 CLI
+    var longbridge = UserDefaults.standard.bool(forKey: "longbridge") {
         didSet {
-            UserDefaults.standard.set(source.rawValue, forKey: "source")
-            if source == .free { disconnect() } else if oldValue == .free { reconnect() }
+            guard longbridge != oldValue else { return }
+            UserDefaults.standard.set(longbridge, forKey: "longbridge")
+            if longbridge { reconnect() } else { cancelLogIn(); disconnect() }
             refreshFreeNow()
         }
     }
 
-    /// 正在用免费行情：手动选择，或自动模式下长桥不可用（刚启动连接中时不算）
-    var usingFree: Bool {
-        guard case .offline = status else { return source == .free }
-        return source != .longbridge
-    }
+    /// 正在用免费行情：没连接长桥，或长桥不可用（刚启动连接中时不算）
+    var usingFree: Bool { status != .live && status != .connecting }
     /// 股票价格是否在更新：长桥已连上，或免费行情最近一次拉取成功
     var stocksLive: Bool { status == .live || (usingFree && freeLive) }
 
-    private(set) var status: Status = .connecting
+    private(set) var status = Status.off
     private(set) var cryptoLive = false
     private(set) var quotes: [String: Quote] = [:]
     private(set) var sparks: [String: [SparkPoint]] = [:]
@@ -60,7 +58,12 @@ final class Store {
     @ObservationIgnored private var lastRefresh = Date.distantPast
     /// 免费行情没有推送，只在面板打开期间轮询
     @ObservationIgnored private var panelVisible = false
+    /// 免费行情的上一轮刷新、整天分时重拉、新加坡报价的时间。lastFree 清零（切到免费行情时）就全部重拉
+    @ObservationIgnored private var lastFree = Date.distantPast
     @ObservationIgnored private var lastFreeSparks = Date.distantPast
+    @ObservationIgnored private var lastSingapore = Date.distantPast
+    /// 同一时间只跑一轮免费刷新
+    @ObservationIgnored private var freeTask: Task<Void, Never>?
     private var freeLive = false
     /// 搜索用的证券目录，首次打开添加框时加载。币与股票分开加载，没连上长桥也能搜币
     private var stockCatalog: [SearchEntry] = []
@@ -73,14 +76,6 @@ final class Store {
     /// 目录变化时搜索建议要重算
     var catalogSize: Int { stockCatalog.count + cryptoCatalog.count }
 
-    /// 各市场常规时段都落在同一个 UTC 日内，用它判断分时是否跨日
-    private static let utc: Calendar = {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .gmt
-        return calendar
-    }()
-
-    private static let notUsingLongbridge = Status.offline("未使用长桥", needsLogin: false)
     private static let minRetryDelay = Duration.seconds(5)
     private static let maxRetryDelay = Duration.seconds(300)
 
@@ -96,11 +91,10 @@ final class Store {
         binance.onQuote = { [weak self] in self?.applyCrypto($0, $1) }
         binance.onLive = { [weak self] in self?.cryptoLive = $0 }
         watchCrypto()
-        if source == .free { status = Self.notUsingLongbridge }
-        Task { await connect() }
+        if longbridge { Task { await connect() } }
         Task {
             while true {
-                if usingFree, panelVisible { await refreshFree() }
+                refreshFreeNow()
                 try? await Task.sleep(for: .seconds(10))
             }
         }
@@ -234,10 +228,6 @@ final class Store {
     private(set) var login = Login.idle
     @ObservationIgnored private var loginTask: Task<Void, Never>?
 
-    /// 自选为空或含股票时才需要长桥；只看加密货币的用户不必被登录提示打扰
-    var needsLongbridge: Bool { source != .free && (stocks.isEmpty || hasStocks) }
-    var hasStocks: Bool { !stockSymbols.isEmpty }
-
     /// 授权在浏览器里完成，面板关掉也会继续等；成功后重连
     func logIn() {
         loginTask?.cancel()
@@ -264,7 +254,7 @@ final class Store {
     // MARK: - 连接
 
     func reconnect() {
-        guard source != .free else { return }
+        guard longbridge else { return }
         retryTask?.cancel()
         retryTask = nil
         retryDelay = Self.minRetryDelay
@@ -280,7 +270,7 @@ final class Store {
     func panelOpened() {
         panelVisible = true
         refreshFreeNow()
-        if case .offline(_, let needsLogin) = status, !needsLogin, source != .free { reconnect() }
+        if case .offline(_, let needsLogin) = status, !needsLogin { reconnect() }
         guard Date.now.timeIntervalSince(lastRefresh) > 30 else { return }
         lastRefresh = .now
         let (stocks, crypto) = (stockSymbols, cryptoSymbols)
@@ -293,7 +283,7 @@ final class Store {
     func panelClosed() { panelVisible = false }
 
     private func connect() async {
-        guard source != .free else { return }
+        guard longbridge else { return }
         generation += 1
         let current = generation
         status = .connecting
@@ -318,12 +308,13 @@ final class Store {
         let needsLogin = (error as? Disconnected)?.needsLogin ?? false
         subscribed = []
         status = .offline(error.localizedDescription, needsLogin: needsLogin)
+        lastFree = .distantPast   // 长桥的报价和分时都要换掉
         refreshFreeNow()
         if needsLogin {
             retryTask?.cancel()
             retryTask = nil
         }
-        guard !needsLogin, retryTask == nil, source != .free else { return }
+        guard !needsLogin, retryTask == nil, longbridge else { return }
         let delay = retryDelay
         retryDelay = min(retryDelay * 2, Self.maxRetryDelay)
         retryTask = Task {
@@ -395,10 +386,13 @@ final class Store {
         guard let symbol = tick["symbol"]?.string, var quote = quotes[symbol] else { return }
         if quote.apply(tick) { Task { await reload([symbol]) } }
         quotes[symbol] = quote
+        if Quote.Session(tick["trade_session"]?.string) == nil { appendSpark(symbol, quote) }
+    }
 
-        // 正常时段的成交接到分时线末尾，同一分钟内只更新最后一个点；跨日则从新的一天重新开始
-        guard Quote.Session(tick["trade_session"]?.string) == nil, var points = sparks[symbol], let last = points.last else { return }
-        if !Self.utc.isDate(quote.time, inSameDayAs: last.time) {
+    /// 常规时段的价格接到分时线末尾，同一分钟内只更新最后一个点；跨日则从新的一天重新开始
+    private func appendSpark(_ symbol: String, _ quote: Quote) {
+        guard var points = sparks[symbol], let last = points.last else { return }
+        if !Calendar.utc.isDate(quote.time, inSameDayAs: last.time) {   // 各市场常规时段都落在同一个 UTC 日内
             points = [SparkPoint(time: quote.time, price: quote.last)]
         } else if quote.time.timeIntervalSince(last.time) < 60 {
             points[points.count - 1].price = quote.last
@@ -436,35 +430,53 @@ final class Store {
 
     // MARK: - 免费行情
 
-    /// 手动选了免费行情：断开长桥，不再重试
+    /// 断开长桥连接：停掉 CLI，不再重试
     private func disconnect() {
         retryTask?.cancel()
         retryTask = nil
         generation += 1          // 进行中的连接作废
         subscribed = []
-        status = Self.notUsingLongbridge
+        status = .off
+        lastFree = .distantPast
         Task { await serve.stop() }
     }
 
+    /// 同一时间只跑一轮；跑的期间自选变了，跑完再补一轮
     private func refreshFreeNow() {
-        guard usingFree, panelVisible else { return }
-        Task { await refreshFree() }
+        guard usingFree, panelVisible, freeTask == nil else { return }
+        freeTask = Task {
+            var symbols: Set<String>
+            repeat {
+                symbols = stockSymbols
+                await refreshFree(symbols)
+            } while usingFree && panelVisible && symbols != stockSymbols
+            freeTask = nil
+        }
     }
 
-    /// 报价每次都拉；分时每分钟一次，新加的股票立即补上
-    private func refreshFree() async {
-        let symbols = stockSymbols
+    /// 报价每 10 秒拉一次；新加坡股本来就延迟，每分钟一次。
+    /// 分时由报价接到末尾，只在首次、面板关过一阵后重新打开、以及每 10 分钟整天重拉校正
+    private func refreshFree(_ symbols: Set<String>) async {
         guard !symbols.isEmpty else { return }
-        let found = await Free.quotes(symbols)
-        guard usingFree else { return }   // 期间连上了长桥，别用延迟数据覆盖
-        freeLive = !found.isEmpty
+        let now = Date.now
+        let reload = now.timeIntervalSince(lastFree) > 60 || now.timeIntervalSince(lastFreeSparks) > 600
+        let singapore = reload || now.timeIntervalSince(lastSingapore) > 60 || symbols.contains { $0.hasSuffix(".SG") && quotes[$0] == nil }
+        let asked = singapore ? symbols : symbols.filter { !$0.hasSuffix(".SG") }
+        let found = await Free.quotes(asked)
+        guard usingFree else { return }   // 期间连上了长桥，别用免费数据覆盖
+        (lastFree, lastSingapore) = (now, singapore ? now : lastSingapore)
+        if reload { lastFreeSparks = now }
+        if !asked.isEmpty { freeLive = !found.isEmpty }
+        // 新加坡股的分时随报价一起来；其余整天重拉的，报价就不必再接到末尾。
+        // 价格没变不接：收盘后腾讯的报价时间还在走，接上去会多出一段平线
+        let wanted = symbols.filter { !$0.hasSuffix(".SG") && (reload || sparks[$0] == nil) }
         for (symbol, snapshot) in found {
+            let moved = quotes[symbol]?.last != snapshot.quote.last
             quotes[symbol] = snapshot.quote
             if let cap = snapshot.marketCap { shares[symbol] = cap / snapshot.quote.last }
+            if let points = snapshot.sparks, !points.isEmpty { sparks[symbol] = points }
+            else if moved, !wanted.contains(symbol) { appendSpark(symbol, snapshot.quote) }
         }
-        let due = Date.now.timeIntervalSince(lastFreeSparks) > 60
-        if due { lastFreeSparks = .now }
-        let wanted = due ? symbols : symbols.filter { sparks[$0] == nil }
         await withTaskGroup { group in
             for symbol in wanted { group.addTask { (symbol, await Free.sparks(symbol)) } }
             for await (symbol, points) in group where usingFree && !points.isEmpty { sparks[symbol] = points }
