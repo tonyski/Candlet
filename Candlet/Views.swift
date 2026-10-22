@@ -10,6 +10,8 @@ struct WatchlistView: View {
     @State private var suggestions: [Stock] = []
     /// suggestions 对应的输入
     @State private var suggestionsFor = ""
+    /// 建议还没跟上输入时按了回车：建议到了再添加
+    @State private var submitted = false
     @FocusState private var focused: Bool
     @AppStorage("group") private var groupID = ""
     @State private var naming: Naming?
@@ -69,7 +71,9 @@ struct WatchlistView: View {
         if store.groups.count > 1 || naming == .new { groupTabs }
         if adding { addField }
         if case .offline(let reason, let needsLogin) = store.status {
-            if needsLogin { loginCard } else { offlineNotice(reason) }
+            if needsLogin { loginCard } else { notice(reason, "立即重连", store.reconnect) }
+        } else if store.freeFailed {
+            notice("行情暂时取不到，稍后自动重试", "立即重试", store.refreshFreeNow)
         }
         Divider()
         list
@@ -246,13 +250,13 @@ struct WatchlistView: View {
         }
     }
 
-    /// 断线会自动重连，这里只给一个立即重连的入口
-    private func offlineNotice(_ reason: String) -> some View {
+    /// 长桥断线、免费行情取不到时的提示条：都会自动重试，这里只给一个立即重试的入口
+    private func notice(_ reason: String, _ title: String, _ action: @escaping () -> Void) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(reason)
                 .foregroundStyle(Color.warning)
             Spacer()
-            Button("立即重连", action: store.reconnect)
+            Button(title, action: action)
                 .buttonStyle(.link)
         }
         .font(.caption2)
@@ -326,19 +330,24 @@ struct WatchlistView: View {
             .padding(.bottom, 10)
             .onAppear(perform: store.loadCatalog)
             .onChange(of: input) { _, text in
+                submitted = false
                 if let stock = suggestions.first(where: { $0.symbol == text }) { add(stock) }
             }
             .task(id: "\(input)|\(store.catalogSize)|\(groupID)") {
                 let query = input
                 let found = await store.suggestions(for: query, in: group.id)
-                if !Task.isCancelled { (suggestions, suggestionsFor) = (found, query) }
+                guard !Task.isCancelled else { return }
+                (suggestions, suggestionsFor) = (found, query)
+                if submitted { addFirstSuggestion() }
             }
     }
 
-    /// 回车添加第一条建议；建议还没跟上输入时不添加，免得加错
+    /// 回车添加第一条建议；建议还没跟上输入时先记下，到了再加，免得加错或像没反应
     private func addFirstSuggestion() {
-        guard !input.isEmpty, suggestionsFor == input,
-              let stock = suggestions.first(where: { $0.symbol == input }) ?? suggestions.first else { return }
+        guard !input.isEmpty else { return }
+        guard suggestionsFor == input else { submitted = true; return }
+        submitted = false
+        guard let stock = suggestions.first(where: { $0.symbol == input }) ?? suggestions.first else { return }
         add(stock)
     }
 
@@ -367,8 +376,9 @@ struct WatchlistView: View {
                         .textInputCompletion(stock.symbol)
                     }
                 }
-            if !input.isEmpty, store.catalogLoading {
-                ProgressView().controlSize(.mini)   // 已输入但证券目录还没加载完
+            // 证券目录还没加载完，或在线搜索（没有长桥目录时）还没返回
+            if !input.isEmpty, store.catalogLoading || (!store.stocksSearchable && suggestionsFor != input) {
+                ProgressView().controlSize(.mini)
             }
         }
     }
@@ -502,8 +512,8 @@ struct StockRow: View, Equatable {
                 }
             }
             .monospacedDigit()
-            .opacity(stale ? 0.45 : 1)
         }
+        .opacity(stale ? 0.45 : 1)   // 整行调淡，名称也一起，一眼看出这行还没更新
         .padding(.horizontal, 8)
         .accessibilityElement(children: .combine)
         .help(tooltip)
@@ -518,10 +528,13 @@ struct StockRow: View, Equatable {
         return "\(prefix)\(Self.updated(time))\(original)"
     }
 
-    /// 更新于 15:42:39；不是今天的带上日期，免得把昨天的收盘价当成刚更新的
-    static func updated(_ time: Date) -> String {
-        "更新于 " + (Calendar.current.isDateInToday(time) ? time.formatted(date: .omitted, time: .standard)
-                                                         : time.formatted(.dateTime.month().day().hour().minute()))
+    /// 更新于 15:42:39
+    static func updated(_ time: Date) -> String { "更新于 " + Self.time(time) }
+
+    /// 15:42:39；不是今天的带上日期，免得把昨天的收盘价当成刚更新的
+    static func time(_ time: Date, seconds: Bool = true) -> String {
+        guard Calendar.current.isDateInToday(time) else { return time.formatted(.dateTime.month().day().hour().minute()) }
+        return time.formatted(date: .omitted, time: seconds ? .standard : .shortened)
     }
 
     /// 第二排文字（代码、市场、延长时段）统一用的灰色

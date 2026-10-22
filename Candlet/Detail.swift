@@ -9,12 +9,15 @@ struct StockDetail: View {
     /// nil 为分时
     @State private var period: KPeriod?
     @State private var candles: [KPeriod: [Candle]] = [:]
+    /// 分时等了几秒还没有，才显示「暂无数据」，刚添加的股票不会先闪一下
+    @State private var sparksWaited = false
 
     private var quote: Quote? { store.quotes[stock.symbol] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            title
             price
             // 和分组标签同一种样式，不用系统分段控件，免得在半透明面板上显得突兀
             HStack(spacing: 2) {
@@ -41,18 +44,13 @@ struct StockDetail: View {
         }
     }
 
+    /// 顶栏只放返回和数据来源，名称作为标题放到下面
     private var header: some View {
         HStack(spacing: 8) {
             Button("返回", systemImage: "chevron.left", action: close)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 .keyboardShortcut(.cancelAction)
-            Text(stock.displayName)
-                .font(.system(size: 13, weight: .semibold))
-                .lineLimit(1)
-            Text(stock.subtitle)
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.secondary)
             Spacer()
             // 数据来源：切换长桥行情时在这里确认
             if let source = quote?.source {
@@ -64,29 +62,63 @@ struct StockDetail: View {
         .frame(height: 36)
     }
 
-    /// 现价一行，涨跌额和涨跌幅在下面一行，右下角是更新时间
-    private var price: some View {
+    /// 名称，下面一行是代码和市场
+    private var title: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(StockRow.price(quote?.last))
-                .font(.system(size: 28, weight: .semibold))
+            Text(stock.displayName)
+                .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
-                .minimumScaleFactor(0.6)
-            HStack(spacing: 10) {
+            Text(stock.subtitle)
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, -8)      // 紧贴顶栏
+        .padding(.bottom, -4)   // 和现价同属一组，比页面其他间距略紧
+    }
+
+    /// 左边是现价和涨跌；右边有更新的盘前盘后成交时并排一个小号报价，否则是更新时间
+    private var price: some View {
+        HStack(alignment: .lastTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(StockRow.price(quote?.last))
+                    .font(.system(size: 22, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 if let quote {
-                    Text((quote.last - quote.prevClose).formatted(.number.precision(.fractionLength(2...3)).sign(strategy: .always())))
-                    Text(StockRow.percent(quote.change))
-                }
-                Spacer()
-                if let time = quote?.time, time > .distantPast {
-                    Text(StockRow.updated(time))
-                        .font(.caption2)
-                        .foregroundStyle(Color.secondary)
+                    change(quote.last - quote.prevClose, quote.change)
+                        .font(.system(size: 12, weight: .medium))
                 }
             }
-            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(tint)
+            Spacer(minLength: 12)
+            if let extended = quote?.latestExtended {
+                VStack(alignment: .trailing, spacing: 2) {
+                    // 只到分钟：新浪的盘前盘后时间本来就没有秒
+                    Text("\(extended.session.name) \(StockRow.time(extended.time, seconds: false))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(StockRow.price(extended.last))
+                        .font(.system(size: 14, weight: .semibold))
+                    change(extended.last - extended.prevClose, extended.change)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(color(extended.change))
+                }
+                .lineLimit(1)
+            } else if let time = quote?.time, time > .distantPast {
+                Text(StockRow.updated(time))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .foregroundStyle(tint)
         .monospacedDigit()
+    }
+
+    /// +4.49  +1.32%
+    private func change(_ amount: Double, _ percent: Double) -> some View {
+        HStack(spacing: 8) {
+            Text(amount.formatted(.number.precision(.fractionLength(2...3)).sign(strategy: .always())))
+            Text(StockRow.percent(percent))
+        }
     }
 
     @ViewBuilder
@@ -100,6 +132,13 @@ struct StockDetail: View {
             }
         } else if let points = store.sparks[stock.symbol], points.count > 1 {
             Sparkline(points: points, slots: stock.sparkSlots, baseline: quote?.prevClose, color: tint)
+        } else if !sparksWaited {
+            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+                .task {
+                    // 切到 K 线时任务被取消，sleep 提前返回，这时不算等过
+                    guard (try? await Task.sleep(for: .seconds(5))) != nil else { return }
+                    sparksWaited = true
+                }
         } else {
             Text("暂无数据")
                 .font(.caption)
@@ -141,9 +180,10 @@ struct StockDetail: View {
     private var rising: Color { redUp ? .quoteRed : .quoteGreen }
     private var falling: Color { redUp ? .quoteGreen : .quoteRed }
 
-    private var tint: Color {
-        guard let change = quote?.change, change != 0 else { return .primary }
-        return change > 0 ? rising : falling
+    private var tint: Color { color(quote?.change ?? 0) }
+
+    private func color(_ change: Double) -> Color {
+        change == 0 ? .primary : change > 0 ? rising : falling
     }
 }
 

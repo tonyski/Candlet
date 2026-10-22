@@ -15,6 +15,7 @@ final class Store {
         didSet {
             guard longbridge != oldValue else { return }
             UserDefaults.standard.set(longbridge, forKey: "longbridge")
+            loginIfNeeded = longbridge
             if longbridge { reconnect() } else { cancelLogIn(); disconnect() }
             refreshFreeNow()
         }
@@ -23,7 +24,9 @@ final class Store {
     /// 正在用免费行情：没连接长桥，或长桥不可用（刚启动连接中时不算）
     var usingFree: Bool { status != .live && status != .connecting }
     /// 股票价格是否在更新：长桥已连上，或免费行情最近一次拉取成功
-    var stocksLive: Bool { status == .live || (usingFree && freeLive) }
+    var stocksLive: Bool { status == .live || (usingFree && freeLive == true) }
+    /// 免费行情一只也没取到（接口失效或断网），面板里给个说明
+    var freeFailed: Bool { usingFree && freeLive == false }
 
     private(set) var status = Status.off
     private(set) var cryptoLive = false
@@ -64,7 +67,10 @@ final class Store {
     @ObservationIgnored private var lastSingapore = Date.distantPast
     /// 同一时间只跑一轮免费刷新
     @ObservationIgnored private var freeTask: Task<Void, Never>?
-    private var freeLive = false
+    /// 最近一轮免费行情是否取到了；nil 表示还没取过，或数据已经旧了（刚切过来、面板关了一阵）
+    private var freeLive: Bool?
+    /// 用户刚打开长桥开关：连接时发现没登录，直接打开授权页，不用再点一次
+    @ObservationIgnored private var loginIfNeeded = false
     /// 搜索用的证券目录，首次打开添加框时加载。币与股票分开加载，没连上长桥也能搜币
     private var stockCatalog: [SearchEntry] = []
     private var cryptoCatalog: [SearchEntry] = []
@@ -293,6 +299,7 @@ final class Store {
             try await subscribe(stockSymbols)
             guard current == generation else { return }
             status = .live
+            loginIfNeeded = false
             retryDelay = Self.minRetryDelay
             lastRefresh = .now
             sync()   // 连接期间增删的自选在这里补上
@@ -313,7 +320,9 @@ final class Store {
         if needsLogin {
             retryTask?.cancel()
             retryTask = nil
+            if loginIfNeeded, case .idle = login { logIn() }
         }
+        loginIfNeeded = false
         guard !needsLogin, retryTask == nil, longbridge else { return }
         let delay = retryDelay
         retryDelay = min(retryDelay * 2, Self.maxRetryDelay)
@@ -441,9 +450,10 @@ final class Store {
         Task { await serve.stop() }
     }
 
-    /// 同一时间只跑一轮；跑的期间自选变了，跑完再补一轮
-    private func refreshFreeNow() {
+    /// 同一时间只跑一轮；跑的期间自选变了，跑完再补一轮。也是失败提示里「立即重试」的入口
+    func refreshFreeNow() {
         guard usingFree, panelVisible, freeTask == nil else { return }
+        if Date.now.timeIntervalSince(lastFree) > 60 { freeLive = nil }   // 旧数据先调淡，新数据到了再恢复
         freeTask = Task {
             var symbols: Set<String>
             repeat {

@@ -134,9 +134,11 @@ enum Free {
             guard f.count > 26, let last = Double(f[1]), let prev = Double(f[26]), last > 0, let time = sinaDate(f[25]) else { continue }
             var quote = Quote(last: last, prevClose: prev, time: time, source: "新浪")
             if let price = Double(f[21]), price > 0, let extTime = sinaDate(f[24]), extTime > time {
-                // 新浪不分盘前盘后，按美东时间上午、下午区分；没有夜盘
+                // 新浪不分盘前盘后，按美东时间上午、下午区分；没有夜盘。
+                // 盘前盘后价带 4 位小数（712.7933），1 美元以上按美股报价习惯取到分
                 let session: Quote.Session = calendar(for: symbol).component(.hour, from: extTime) < 12 ? .pre : .post
-                quote.extended = .init(session: session, last: price, prevClose: last, time: extTime)
+                let cents = price >= 1 ? (price * 100).rounded() / 100 : price
+                quote.extended = .init(session: session, last: cents, prevClose: last, time: extTime)
             }
             found[symbol] = Snapshot(quote: quote, marketCap: Double(f[12]))
         }
