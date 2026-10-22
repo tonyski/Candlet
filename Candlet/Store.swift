@@ -210,6 +210,13 @@ final class Store {
 
     func renameGroup(_ id: StockGroup.ID, to name: String) { update(id) { $0.name = name } }
 
+    /// 把分组挪到目标分组所在的位置
+    func moveGroup(_ id: StockGroup.ID, to target: StockGroup.ID) {
+        guard let from = groups.firstIndex(where: { $0.id == id }),
+              let to = groups.firstIndex(where: { $0.id == target }), from != to else { return }
+        groups.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
+    }
+
     /// 连同其中的股票一起删除，至少保留一个分组
     func deleteGroup(_ id: StockGroup.ID) {
         guard groups.count > 1 else { return }

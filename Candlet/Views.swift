@@ -15,6 +15,9 @@ struct WatchlistView: View {
     @State private var naming: Naming?
     @State private var draftName = ""
     @FocusState private var nameFocused: Bool
+    /// 正在拖动排序的分组标签，及各标签的位置（用来判断是否越过了相邻标签）
+    @State private var tabDrag: TabDrag?
+    @State private var tabFrames: [StockGroup.ID: CGRect] = [:]
     /// 也可能在系统设置里改，面板打开时重新读取
     @State private var launchAtLogin = LoginItem.isEnabled
 
@@ -24,7 +27,15 @@ struct WatchlistView: View {
     /// 当前分组；记住的分组被删掉时回到第一个
     private var group: StockGroup { store.groups.first { $0.id.uuidString == groupID } ?? store.groups[0] }
 
+    private struct TabDrag {
+        let id: StockGroup.ID
+        /// 拖动中与相邻标签换位后，标签的原位跟着移动了这么多，要从鼠标位移里扣掉
+        var shift: CGFloat = 0
+        var offset: CGFloat = 0
+    }
+
     private let rowHeight: CGFloat = 44
+    private let tabSpacing: CGFloat = 2
     /// 面板内容左右边距。List 自带约 8pt 行内边距，行内再补 8pt 对齐到这里
     private let margin: CGFloat = 16
 
@@ -108,7 +119,7 @@ struct WatchlistView: View {
     private var groupTabs: some View {
         ScrollViewReader { scroller in
             ScrollView(.horizontal) {
-                HStack(spacing: 2) {
+                HStack(spacing: tabSpacing) {
                     ForEach(store.groups) { item in
                         let selected = item.id == group.id
                         if naming == .rename(item.id) {
@@ -119,16 +130,41 @@ struct WatchlistView: View {
                                 .buttonStyle(.plain)
                                 .foregroundStyle(active ? .primary : .secondary)
                                 .groupTab(active: active)
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("tabs")) } action: { tabFrames[item.id] = $0 }
+                                .offset(x: tabDrag?.id == item.id ? tabDrag?.offset ?? 0 : 0)
+                                .zIndex(tabDrag?.id == item.id ? 1 : 0)
+                                .highPriorityGesture(DragGesture(minimumDistance: 3, coordinateSpace: .named("tabs"))
+                                    .onChanged { dragTab(item.id, $0) }
+                                    .onEnded { _ in tabDrag = nil })
                         }
                     }
                     if naming == .new { nameTab }
                 }
                 .padding(.horizontal, margin - 8)   // 标签自带 8pt 内边距，文字与标题对齐
+                .coordinateSpace(.named("tabs"))
             }
             .scrollIndicators(.never)
             .onChange(of: naming) { if naming != nil { withAnimation { scroller.scrollTo("naming") } } }
         }
         .padding(.bottom, 6)
+    }
+
+    /// 拖动的标签跟着鼠标走；鼠标越过相邻标签的中线就和它换位，松手即停在新位置
+    private func dragTab(_ id: StockGroup.ID, _ value: DragGesture.Value) {
+        var drag = tabDrag ?? TabDrag(id: id)
+        let ids = store.groups.map(\.id)
+        if let i = ids.firstIndex(of: id) {
+            let x = value.location.x
+            if i + 1 < ids.count, let next = tabFrames[ids[i + 1]], x > next.midX {
+                store.moveGroup(id, to: ids[i + 1])
+                drag.shift += next.width + tabSpacing
+            } else if i > 0, let previous = tabFrames[ids[i - 1]], x < previous.midX {
+                store.moveGroup(id, to: ids[i - 1])
+                drag.shift -= previous.width + tabSpacing
+            }
+        }
+        drag.offset = value.translation.width - drag.shift
+        tabDrag = drag
     }
 
     /// 新建、重命名都直接在标签上编辑：回车或点别处保存，Esc 取消
@@ -187,7 +223,7 @@ struct WatchlistView: View {
         guard !target.stocks.isEmpty else { return store.deleteGroup(target.id) }
         let alert = NSAlert()
         alert.messageText = "删除「\(target.name)」？"
-        alert.informativeText = "其中 \(target.stocks.count) 只自选会一并删除。"
+        alert.informativeText = "分组里的 \(target.stocks.count) 只自选会一起删除，且无法撤销。"
         alert.addButton(withTitle: "删除").hasDestructiveAction = true
         alert.addButton(withTitle: "取消")
         NSApp.activate()
@@ -200,7 +236,8 @@ struct WatchlistView: View {
         case .checking: Button("正在检查更新…") {}.disabled(true)
         case .upToDate: Button("已是最新版本（\(updater.current)）", action: updater.check)
         case .failed: Button("检查更新失败，点击重试", action: updater.check)
-        case .available(let version, let url): Button("下载新版本（\(version)）") { openURL(url) }
+        case .available(let version, _): Button("更新到 \(version)", action: updater.install)
+        case .installing(let version): Button("正在安装 \(version)…") {}.disabled(true)
         }
     }
 
@@ -225,8 +262,8 @@ struct WatchlistView: View {
             case .idle, .failed:
                 Text("登录长桥，查看实时行情")
                     .font(.system(size: 12, weight: .semibold))
-                Text(store.source == .auto ? "当前为免费延迟行情，需开通 OpenAPI 的长桥账户。"
-                                           : "需开通 OpenAPI 的长桥账户，加密货币无需登录。")
+                Text(store.source == .auto ? "现在显示的是免费延迟行情。实时行情需要已开通 OpenAPI 的长桥账户。"
+                                           : "需要已开通 OpenAPI 的长桥账户；加密货币无需登录。")
                     .foregroundStyle(.secondary)
                 if case .failed(let message) = store.login {
                     Text(message).foregroundStyle(Color.warning)
@@ -244,7 +281,7 @@ struct WatchlistView: View {
                     Text("请在浏览器中完成授权…")
                 }
                 HStack(spacing: 12) {
-                    if let url { Button("重新打开") { openURL(url) } }
+                    if let url { Button("重新打开授权页") { openURL(url) } }
                     Button("取消", action: store.cancelLogIn)
                 }
                 .buttonStyle(.link)

@@ -21,7 +21,7 @@ enum Free {
                       let symbol = byWire[wire] else { continue }
                 let f = parts[1].trimmingCharacters(in: .init(charactersIn: "\"\n ")).split(separator: "~", omittingEmptySubsequences: false)
                 guard f.count > 45, let last = Double(f[3]), let prev = Double(f[4]), last > 0,
-                      let time = date(String(f[30]), zone: zone(symbol)) else { continue }
+                      let time = date(String(f[30]), in: calendar(for: symbol)) else { continue }
                 found[symbol] = Snapshot(quote: Quote(last: last, prevClose: prev, time: time),
                                          marketCap: Double(f[45]).map { $0 * 1e8 })   // 总市值，单位亿
             }
@@ -41,13 +41,13 @@ enum Free {
               let day = (try? JSONDecoder().decode(JSON.self, from: data))?["data"]?[wire]?["data"] else { return [] }
         // 每个点形如 "0930 412.000 566848 …"；没给日期时按交易所当天算。
         // A 股还带 15:00 后的盘后固定价格交易，和长桥一样只画常规时段
-        let zone = zone(symbol)
-        let date = day["date"]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? today(in: zone)
+        let calendar = calendar(for: symbol)
+        let date = day["date"]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? today(in: calendar)
         let close = symbol.hasSuffix(".SH") || symbol.hasSuffix(".SZ") ? "1500" : "9999"
         return day["data"]?.list().compactMap { item in
             let f = item.string?.split(separator: " ") ?? []
             guard f.count > 1, f[0] <= close, let price = Double(f[1]),
-                  let time = Self.date(date + f[0] + "00", zone: zone) else { return nil }
+                  let time = Self.date(date + f[0] + "00", in: calendar) else { return nil }
             return SparkPoint(time: time, price: price)
         } ?? []
     }
@@ -112,24 +112,23 @@ enum Free {
         return (Snapshot(quote: Quote(last: last, prevClose: prev, time: time), marketCap: nil), points)
     }
 
-    private static func zone(_ symbol: String) -> TimeZone {
-        TimeZone(identifier: symbol.hasSuffix(".US") ? "America/New_York" : symbol.hasSuffix(".HK") ? "Asia/Hong_Kong" : "Asia/Shanghai")!
+    /// 按交易所时区解析时间：美股纽约，港股香港，其余上海
+    private static func calendar(for symbol: String) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: symbol.hasSuffix(".US") ? "America/New_York" : symbol.hasSuffix(".HK") ? "Asia/Hong_Kong" : "Asia/Shanghai")!
+        return calendar
     }
 
-    /// "2026/10/21 16:08:21"、"2026-10-20 16:00:01"、"20261021161453" 都取出 14 位数字，按交易所时区解析
-    private static func date(_ text: String, zone: TimeZone) -> Date? {
+    /// "2026/10/21 16:08:21"、"2026-10-20 16:00:01"、"20261021161453" 都取出 14 位数字再解析
+    private static func date(_ text: String, in calendar: Calendar) -> Date? {
         let digits = Array(text.filter(\.isNumber))
         guard digits.count >= 14 else { return nil }
         func part(_ range: Range<Int>) -> Int? { Int(String(digits[range])) }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = zone
         return calendar.date(from: DateComponents(year: part(0..<4), month: part(4..<6), day: part(6..<8),
                                                   hour: part(8..<10), minute: part(10..<12), second: part(12..<14)))
     }
 
-    private static func today(in zone: TimeZone) -> String {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = zone
+    private static func today(in calendar: Calendar) -> String {
         let c = calendar.dateComponents([.year, .month, .day], from: .now)
         return String(format: "%04d%02d%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }

@@ -15,8 +15,9 @@ scripts/fetch-longbridge.sh
 
 echo "==> 编译 Candlet $VERSION"
 rm -rf $BUILD
+# build 默认不 strip，打开 DEPLOYMENT_POSTPROCESSING 去掉符号（主程序约小一半），dSYM 照常生成
 xcodebuild -project Candlet.xcodeproj -scheme Candlet -configuration Release -destination 'generic/platform=macOS' \
-  -derivedDataPath $BUILD clean build -quiet 2>&1 | grep -v -e appintents -e IDERunDestination || true
+  -derivedDataPath $BUILD DEPLOYMENT_POSTPROCESSING=YES clean build -quiet 2>&1 | grep -v -e appintents -e IDERunDestination || true
 [[ -d $APP ]] || { echo "编译失败"; exit 1; }
 codesign --verify --deep --strict $APP
 SIGNATURE=$(codesign -dv --verbose=2 $APP 2>&1)
@@ -30,7 +31,8 @@ ditto $APP $STAGE/Candlet.app
 ln -s /Applications $STAGE/Applications
 mkdir -p dist
 rm -f $DMG
-hdiutil create -volname Candlet -srcfolder $STAGE -format UDZO -fs APFS $DMG -quiet
+# LZMA 压缩，比默认的 UDZO 小约 2 MB（主要是长桥 CLI）
+hdiutil create -volname Candlet -srcfolder $STAGE -format ULMO -fs APFS $DMG -quiet
 IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/{print $2; exit}')
 codesign --sign "$IDENTITY" --timestamp $DMG
 
