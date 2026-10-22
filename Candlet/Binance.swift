@@ -49,12 +49,28 @@ final class Binance {
 
     /// 最近 24 小时的 5 分钟 K 线收盘价
     static func sparks(_ symbol: String) async -> [SparkPoint] {
-        guard let url = URL(string: rest + "klines?symbol=\(wire(symbol))&interval=5m&limit=\(Stock.cryptoSlots)"),
+        await klines(symbol, interval: "5m", limit: Stock.cryptoSlots).map { SparkPoint(time: $0.time, price: $0.close) }
+    }
+
+    /// 详情页的日、周、月 K 线
+    static func candles(_ symbol: String, _ period: KPeriod) async -> [Candle] {
+        let interval = switch period {
+        case .day: "1d"
+        case .week: "1w"
+        case .month: "1M"
+        }
+        return await klines(symbol, interval: interval, limit: Candle.loadCount)
+    }
+
+    /// 每根形如 [开盘时间, 开, 高, 低, 收, 量, …]
+    private static func klines(_ symbol: String, interval: String, limit: Int) async -> [Candle] {
+        guard let url = URL(string: rest + "klines?symbol=\(wire(symbol))&interval=\(interval)&limit=\(limit)"),
               let (data, _) = try? await URLSession.shared.data(from: url),
               case .array(let bars)? = try? JSONDecoder().decode(JSON.self, from: data) else { return [] }
         return bars.compactMap { bar in
-            guard case .array(let k) = bar, k.count > 4, let time = k[0].date, let price = k[4].double else { return nil }
-            return SparkPoint(time: time, price: price)
+            guard case .array(let k) = bar, k.count > 5, let time = k[0].date, let open = k[1].double,
+                  let high = k[2].double, let low = k[3].double, let close = k[4].double else { return nil }
+            return Candle(time: time, open: open, high: high, low: low, close: close, volume: k[5].double ?? 0)
         }
     }
 

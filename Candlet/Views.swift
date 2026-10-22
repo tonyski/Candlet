@@ -18,6 +18,8 @@ struct WatchlistView: View {
     /// 正在拖动排序的分组标签，及各标签的位置（用来判断是否越过了相邻标签）
     @State private var tabDrag: TabDrag?
     @State private var tabFrames: [StockGroup.ID: CGRect] = [:]
+    /// 点开的自选，面板显示它的详情
+    @State private var detail: Stock?
     /// 也可能在系统设置里改，面板打开时重新读取
     @State private var launchAtLogin = LoginItem.isEnabled
 
@@ -41,14 +43,11 @@ struct WatchlistView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            if store.groups.count > 1 || naming == .new { groupTabs }
-            if adding { addField }
-            if case .offline(let reason, let needsLogin) = store.status, store.needsLongbridge {
-                if needsLogin { loginCard } else { offlineNotice(reason) }
+            if let detail {
+                StockDetail(stock: detail) { self.detail = nil }
+            } else {
+                watchlist
             }
-            Divider()
-            list
         }
         .frame(width: 360)
         .onAppear(perform: store.panelOpened)
@@ -57,7 +56,23 @@ struct WatchlistView: View {
             store.panelOpened()
             launchAtLogin = LoginItem.isEnabled
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in store.panelClosed() }
+        // 面板关掉后下次打开回到列表
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            store.panelClosed()
+            detail = nil
+        }
+    }
+
+    @ViewBuilder
+    private var watchlist: some View {
+        header
+        if store.groups.count > 1 || naming == .new { groupTabs }
+        if adding { addField }
+        if case .offline(let reason, let needsLogin) = store.status, store.needsLongbridge {
+            if needsLogin { loginCard } else { offlineNotice(reason) }
+        }
+        Divider()
+        list
     }
 
     private var header: some View {
@@ -424,6 +439,8 @@ struct WatchlistView: View {
                         }
                     }
                     .modifier(HoverHighlight())
+                    // 点在整行任意位置都进详情（HoverHighlight 已把整行设为可点区域）；改名时不跳转
+                    .onTapGesture { if naming != .stock(stock.symbol) { detail = stock } }
                     .frame(height: rowHeight)
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
@@ -592,7 +609,7 @@ struct Badge: View {
     }
 
     /// 4.94万亿、1334亿、12.3亿
-    private static func compact(_ value: Double) -> String {
+    static func compact(_ value: Double) -> String {
         let (scaled, unit) = switch value {
         case 1e12...: (value / 1e12, "万亿")
         case 1e8...: (value / 1e8, "亿")

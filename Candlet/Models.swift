@@ -295,3 +295,34 @@ nonisolated struct SparkPoint: Equatable, Sendable {
     var time: Date
     var price: Double
 }
+
+// MARK: - K 线
+
+nonisolated enum KPeriod: String, CaseIterable, Sendable {
+    case day, week, month
+
+    var title: String {
+        switch self {
+        case .day: "日K"
+        case .week: "周K"
+        case .month: "月K"
+        }
+    }
+}
+
+nonisolated struct Candle: Sendable {
+    var time: Date
+    var open, high, low, close, volume: Double
+
+    /// 详情页每个周期加载的根数，图上显示其中一段，拖动翻看
+    static let loadCount = 200
+}
+
+nonisolated extension Candle {
+    /// 长桥 quote.candlesticks 的一根
+    init?(json j: JSON) {
+        guard let time = j["timestamp"]?.date, let open = j["open"]?.double, let high = j["high"]?.double,
+              let low = j["low"]?.double, let close = j["close"]?.double else { return nil }
+        self.init(time: time, open: open, high: high, low: low, close: close, volume: j["volume"]?.double ?? 0)
+    }
+}

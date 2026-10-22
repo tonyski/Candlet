@@ -426,6 +426,14 @@ final class Store {
         }
     }
 
+    /// 详情页的 K 线：加密货币走 Binance，股票走长桥，用免费行情时走腾讯、Yahoo
+    func candles(_ symbol: String, _ period: KPeriod) async -> [Candle] {
+        if Stock.isCrypto(symbol) { return await Binance.candles(symbol, period) }
+        if usingFree { return await Free.candles(symbol, period) }
+        let params: JSON = ["symbol": .string(symbol), "period": .string(period.rawValue), "count": .number(Double(Candle.loadCount))]
+        return (try? await serve.call("quote.candlesticks", params))?.list().compactMap(Candle.init(json:)) ?? []
+    }
+
     // MARK: - 免费行情
 
     /// 手动选了免费行情：断开长桥，不再重试

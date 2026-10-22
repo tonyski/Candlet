@@ -52,6 +52,21 @@ enum Free {
         } ?? []
     }
 
+    /// 详情页的日、周、月 K 线：A 股、港股用腾讯；美股用 Yahoo（腾讯的美股 K 线要带交易所后缀，而代码里没有），新加坡股也是
+    static func candles(_ symbol: String, _ period: KPeriod) async -> [Candle] {
+        guard let wire = tencent(symbol), !symbol.hasSuffix(".US") else { return await yahooCandles(symbol, period) }
+        guard let url = URL(string: "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=\(wire),\(period.rawValue),,,\(Candle.loadCount),qfq"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let series = (try? JSONDecoder().decode(JSON.self, from: data))?["data"]?[wire] else { return [] }
+        // 每根形如 ["2026-10-21", 开, 收, 高, 低, 量]；前复权的键名带 qfq 前缀，港股没有
+        let calendar = calendar(for: symbol)
+        return (series["qfq" + period.rawValue] ?? series[period.rawValue])?.list().compactMap { bar in
+            guard case .array(let f) = bar, f.count > 5, let day = f[0].string, let time = date(day + "000000", in: calendar),
+                  let open = f[1].double, let close = f[2].double, let high = f[3].double, let low = f[4].double else { return nil }
+            return Candle(time: time, open: open, high: high, low: low, close: close, volume: f[5].double ?? 0)
+        } ?? []
+    }
+
     /// 按代码、名称或拼音搜 A 股、港股、美股（含 ETF），没有长桥的证券目录时使用
     static func search(_ query: String) async -> [Stock] {
         var components = URLComponents(string: "https://smartbox.gtimg.cn/s3/")!
@@ -93,14 +108,19 @@ enum Free {
         }
     }
 
-    /// Yahoo 一次返回报价和当天分时；不带浏览器 UA 会被拒
-    private static func yahoo(_ symbol: String) async -> (Snapshot, [SparkPoint])? {
-        let code = symbol.dropLast(3)   // D05.SG → D05.SI
-        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(code).SI?interval=1m&range=1d") else { return nil }
+    /// Yahoo 图表接口：D05.SG → D05.SI，BRK.B.US → BRK-B；不带浏览器 UA 会被拒
+    private static func yahooChart(_ symbol: String, interval: String, range: String) async -> JSON? {
+        let code = symbol.hasSuffix(".SG") ? symbol.dropLast(3) + ".SI" : symbol.dropLast(3).replacing(".", with: "-")
+        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(code)?interval=\(interval)&range=\(range)") else { return nil }
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let result = (try? JSONDecoder().decode(JSON.self, from: data))?["chart"]?["result"]?.list().first,
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        return (try? JSONDecoder().decode(JSON.self, from: data))?["chart"]?["result"]?.list().first
+    }
+
+    /// 新加坡股：一次返回报价和当天分时
+    private static func yahoo(_ symbol: String) async -> (Snapshot, [SparkPoint])? {
+        guard let result = await yahooChart(symbol, interval: "1m", range: "1d"),
               let meta = result["meta"], let last = meta["regularMarketPrice"]?.double,
               let prev = meta["chartPreviousClose"]?.double ?? meta["previousClose"]?.double,
               let time = meta["regularMarketTime"]?.date else { return nil }
@@ -110,6 +130,26 @@ enum Free {
             time.date.flatMap { t in close.double.map { SparkPoint(time: t, price: $0) } }
         }
         return (Snapshot(quote: Quote(last: last, prevClose: prev, time: time), marketCap: nil), points)
+    }
+
+    /// Yahoo 按时间范围取，日、周 K 约 250 根，月 K 约 120 根
+    private static func yahooCandles(_ symbol: String, _ period: KPeriod) async -> [Candle] {
+        let (interval, range) = switch period {
+        case .day: ("1d", "1y")
+        case .week: ("1wk", "5y")
+        case .month: ("1mo", "10y")
+        }
+        guard let result = await yahooChart(symbol, interval: interval, range: range),
+              let quote = result["indicators"]?["quote"]?.list().first else { return [] }
+        let times = result["timestamp"]?.list() ?? []
+        let (open, high, low, close, volume) = (quote["open"]?.list() ?? [], quote["high"]?.list() ?? [], quote["low"]?.list() ?? [],
+                                                quote["close"]?.list() ?? [], quote["volume"]?.list() ?? [])
+        guard [open, high, low, close, volume].allSatisfy({ $0.count == times.count }) else { return [] }
+        return times.indices.compactMap { i in   // 没成交的那根是 null
+            guard let time = times[i].date, let o = open[i].double, let h = high[i].double,
+                  let l = low[i].double, let c = close[i].double else { return nil }
+            return Candle(time: time, open: o, high: h, low: l, close: c, volume: volume[i].double ?? 0)
+        }
     }
 
     /// 按交易所时区解析时间：美股纽约，港股香港，其余上海
