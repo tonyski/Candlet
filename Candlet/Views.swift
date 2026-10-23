@@ -52,12 +52,9 @@ struct WatchlistView: View {
             }
         }
         .frame(width: 360)
-        .onAppear(perform: store.panelOpened)
+        .onAppear(perform: panelOpened)
         // 某些系统版本上 MenuBarExtra 的 onAppear 只在首次打开时触发，用面板成为 key window 兜底
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
-            store.panelOpened()
-            launchAtLogin = LoginItem.isEnabled
-        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in panelOpened() }
         // 面板关掉后下次打开回到列表
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
             store.panelClosed()
@@ -65,15 +62,23 @@ struct WatchlistView: View {
         }
     }
 
+    /// 刷新行情、按需检查更新；登录项也可能在系统设置里改过，重新读取
+    private func panelOpened() {
+        store.panelOpened()
+        updater.panelOpened()
+        launchAtLogin = LoginItem.isEnabled
+    }
+
     @ViewBuilder
     private var watchlist: some View {
         header
         if store.groups.count > 1 || naming == .new { groupTabs }
         if adding { addField }
-        if case .offline(let reason, let needsLogin) = store.status {
-            if needsLogin { loginCard } else { notice(reason, "立即重连", store.reconnect) }
+        // 长桥普通断线时已自动改用免费行情，只在标题栏提示；这里只放需要用户处理的
+        if case .offline(_, needsLogin: true) = store.status {
+            loginCard
         } else if store.freeFailed {
-            notice("行情暂时取不到，稍后自动重试", "立即重试", store.refreshFreeNow)
+            freeFailedNotice
         }
         Divider()
         list
@@ -90,15 +95,11 @@ struct WatchlistView: View {
                 adding ? closeAddField() : openAddField()
             }
             .help(addTitle)
-            if case .available(let version, _) = updater.state {
-                Circle().fill(.tint).frame(width: 6, height: 6).help("有新版本 \(version)")   // 用强调色，不用红色，免得像涨跌或报错
+            if case .available(let release) = updater.state {
+                Circle().fill(.tint).frame(width: 6, height: 6).help("有新版本 \(release.version)")   // 用强调色，不用红色，免得像涨跌或报错
             }
             Menu {
                 Button("新建分组…") { startNaming(.new, "") }
-                if store.groups.count > 1 {
-                    Button("重命名分组…") { startNaming(.rename(group.id), group.name) }
-                    Button(group.stocks.isEmpty ? "删除分组" : "删除分组…", role: .destructive) { confirmDelete(group) }
-                }
                 Divider()
                 @Bindable var store = store
                 Toggle("使用长桥行情", isOn: $store.longbridge)
@@ -145,6 +146,7 @@ struct WatchlistView: View {
                                 .highPriorityGesture(DragGesture(minimumDistance: 3, coordinateSpace: .named("tabs"))
                                     .onChanged { dragTab(item.id, $0) }
                                     .onEnded { _ in tabDrag = nil })
+                                .contextMenu { tabMenu(item) }
                         }
                     }
                     if naming == .new { nameTab }
@@ -156,6 +158,15 @@ struct WatchlistView: View {
             .onChange(of: naming) { if naming != nil { withAnimation { scroller.scrollTo("naming") } } }
         }
         .padding(.bottom, 6)
+    }
+
+    /// 分组标签的右键菜单，和自选行的右键菜单一致；至少保留一个分组
+    @ViewBuilder
+    private func tabMenu(_ item: StockGroup) -> some View {
+        Button("重命名…") { startNaming(.rename(item.id), item.name) }
+        if store.groups.count > 1 {
+            Button(item.stocks.isEmpty ? "删除" : "删除…", role: .destructive) { confirmDelete(item) }
+        }
     }
 
     /// 拖动的标签跟着鼠标走；鼠标越过相邻标签的中线就和它换位，松手即停在新位置
@@ -245,18 +256,20 @@ struct WatchlistView: View {
         case .checking: Button("正在检查更新…") {}.disabled(true)
         case .upToDate: Button("已是最新版本（\(updater.current)）", action: updater.check)
         case .failed: Button("检查更新失败，点击重试", action: updater.check)
-        case .available(let version, _): Button("更新到 \(version)", action: updater.install)
-        case .installing(let version): Button("正在安装 \(version)…") {}.disabled(true)
+        case .available(let release):
+            Button("更新到 \(release.version)", action: updater.install)
+            Button("查看更新内容") { openURL(release.page) }
+        case .installing(let release): Button("正在安装 \(release.version)…") {}.disabled(true)
         }
     }
 
-    /// 长桥断线、免费行情取不到时的提示条：都会自动重试，这里只给一个立即重试的入口
-    private func notice(_ reason: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+    /// 免费行情取不到时的提示条：会自动重试，这里只给一个立即重试的入口
+    private var freeFailedNotice: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(reason)
+            Text("行情暂时取不到，稍后自动重试")
                 .foregroundStyle(Color.warning)
             Spacer()
-            Button(title, action: action)
+            Button("立即重试", action: store.refreshFreeNow)
                 .buttonStyle(.link)
         }
         .font(.caption2)
@@ -269,7 +282,7 @@ struct WatchlistView: View {
         VStack(alignment: .leading, spacing: 8) {
             switch store.login {
             case .idle, .failed:
-                Text("登录长桥，查看实时行情")
+                Text("登录长桥")
                     .font(.system(size: 12, weight: .semibold))
                 Text("需要已开通 OpenAPI 的长桥账户")
                     .foregroundStyle(.secondary)
@@ -304,23 +317,22 @@ struct WatchlistView: View {
         .padding(.bottom, 10)
     }
 
-    /// 只在异常时出现，靠形状而不只是颜色区分；绿点会和「红涨绿跌」里的跌混淆，正常连接时不显示
+    /// 只在连接中、断线时出现，靠形状而不只是颜色区分；绿点会和「红涨绿跌」里的跌混淆，正常连接时不显示。
+    /// 未登录时下面有登录卡片，这里不再重复
     @ViewBuilder
     private var longbridgeStatus: some View {
         switch store.status {
-        case .off, .live: EmptyView()
+        case .off, .live, .offline(_, needsLogin: true): EmptyView()
         case .connecting:
             ProgressView()
                 .controlSize(.mini)
                 .help("正在连接长桥…")
                 .accessibilityLabel("正在连接长桥")
-        case .offline(_, let needsLogin):
-            let text = needsLogin ? "未登录长桥" : "长桥已断开"
-            Image(systemName: "exclamationmark.triangle.fill")
+        case .offline(let reason, needsLogin: false):
+            Button("长桥已断开，点击立即重连", systemImage: "exclamationmark.triangle.fill", action: store.reconnect)
                 .font(.system(size: 10))
                 .foregroundStyle(Color.warning)
-                .help(text)
-                .accessibilityLabel(text)
+                .help("长桥：\(reason)\n暂用免费行情，点击立即重连")
         }
     }
 

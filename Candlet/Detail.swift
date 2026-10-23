@@ -30,16 +30,17 @@ struct StockDetail: View {
             }
             .padding(.leading, -8)   // 标签自带 8pt 内边距，文字与上面对齐
             chart
-                .frame(height: 150)
+                .frame(height: 180)
             stats
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 14)
-        // 先加载正在看的图；当日开高低和成交量取最新一根日 K，所以日 K 总要加载。
+        // 先加载正在看的图；股票的当日开高低和成交量取最新一根日 K，所以日 K 总要加载（加密货币用推送里的 24 小时统计）。
         // 每次打开详情都重新拉；没拉到（比如长桥还在连接）的，切换标签时再试
         .task(id: period) {
-            let viewed = period ?? .day
-            for item in viewed == .day ? [.day] : [viewed, .day] where candles[item]?.isEmpty ?? true {
+            var wanted = [period].compactMap { $0 }
+            if !stock.isCrypto, period != .day { wanted.append(.day) }
+            for item in wanted where candles[item]?.isEmpty ?? true {
                 candles[item] = await store.candles(stock.symbol, item)
             }
         }
@@ -131,8 +132,13 @@ struct StockDetail: View {
             } else {
                 ChartPlaceholder(loading: true)
             }
-        } else if let points = store.sparks[stock.symbol], points.count > 1 {
-            Sparkline(points: points, slots: stock.market?.sparkSlots ?? 0, baseline: quote?.prevClose, color: tint)
+        } else if let points = store.sparks[stock.symbol], let range = Sparkline.range(points, baseline: quote?.prevClose) {
+            // 股票横轴是整个常规时段，两端标开盘、收盘；加密货币是最近 24 小时，标首尾时间（昨天的带日期，免得像倒过来）
+            let session = stock.market?.session
+                ?? (Format.time(points[0].time, seconds: false), Format.time(points[points.count - 1].time, seconds: false))
+            ChartAxes(high: range.upperBound, low: range.lowerBound, start: session.open, end: session.close) {
+                Sparkline(points: points, slots: stock.market?.sparkSlots ?? 0, baseline: quote?.prevClose, color: tint)
+            }
         } else if !sparksWaited {
             ChartPlaceholder(loading: true)
                 .task {
@@ -145,20 +151,22 @@ struct StockDetail: View {
         }
     }
 
-    /// 两行三列；加密货币的「昨收」其实是 24 小时前的价格
+    /// 两行三列。加密货币是 24 小时滚动统计，开盘价就是 24 小时前的价格，所以少一格「昨收」
     private var stats: some View {
-        let today = candles[.day]?.last
+        let crypto = stock.isCrypto
+        let today = crypto ? quote?.rolling : candles[.day]?.last
         let prevClose = quote?.prevClose
         let amplitude = today.flatMap { t in prevClose.flatMap { $0 > 0 ? (t.high - t.low) / $0 : nil } }
+        let span = crypto ? "24 小时" : ""
         return Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
             GridRow {
-                stat("今开", Format.price(today?.open))
-                stat("最高", Format.price(today?.high))
-                stat("最低", Format.price(today?.low))
+                stat(crypto ? "24 小时前" : "今开", Format.price(today?.open))
+                stat(span + "最高", Format.price(today?.high))
+                stat(span + "最低", Format.price(today?.low))
             }
             GridRow {
-                stat(stock.isCrypto ? "24 小时前" : "昨收", Format.price(prevClose))
-                stat("成交量", today.map { Format.compact($0.volume) } ?? "--")
+                if !crypto { stat("昨收", Format.price(prevClose)) }
+                stat(span + "成交量", today.map { Format.compact($0.volume) } ?? "--")
                 stat("振幅", amplitude.map { $0.formatted(.percent.precision(.fractionLength(2))) } ?? "--")
             }
         }
@@ -203,7 +211,79 @@ struct ChartPlaceholder: View {
     }
 }
 
-/// 蜡烛图：一次显示最近 60 根，左右拖动翻看更早的；右侧标出可见区间的最高、最低价，下方标出首尾日期
+/// 图表的刻度：右侧标出图上的最高、最低价，下方标出首尾时间。K 线和分时共用；
+/// K 线下方还有成交量副图，右上角标出可见区间的最大量
+struct ChartAxes<Chart: View, Volume: View>: View {
+    let high: Double
+    let low: Double
+    let start: String
+    let end: String
+    /// nil 时不显示成交量副图
+    let volumeMax: Double?
+    let chart: Chart
+    let volume: Volume
+
+    init(high: Double, low: Double, start: String, end: String, volumeMax: Double?,
+         @ViewBuilder chart: () -> Chart, @ViewBuilder volume: () -> Volume) {
+        (self.high, self.low, self.start, self.end, self.volumeMax) = (high, low, start, end, volumeMax)
+        (self.chart, self.volume) = (chart(), volume())
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                chart
+                gutter {
+                    VStack(alignment: .trailing) {
+                        Text(Format.price(high))
+                        Spacer()
+                        Text(Format.price(low))
+                    }
+                }
+            }
+            if let volumeMax {
+                HStack(spacing: 6) {
+                    volume
+                    gutter { Text(Format.compact(volumeMax)).frame(maxHeight: .infinity, alignment: .top) }
+                }
+                .frame(height: 32)
+            }
+            HStack(spacing: 6) {
+                HStack {
+                    Text(start)
+                    Spacer()
+                    Text(end)
+                }
+                gutter { EmptyView() }
+            }
+        }
+        .font(.system(size: 10).monospacedDigit())
+        .foregroundStyle(.secondary)
+    }
+
+    /// 右侧标注栏：每行都按最长的标注取同一宽度，各行的图才能左右对齐
+    private func gutter(@ViewBuilder _ content: () -> some View) -> some View {
+        ZStack(alignment: .trailing) {
+            VStack {
+                Text(Format.price(high))
+                Text(Format.price(low))
+                if let volumeMax { Text(Format.compact(volumeMax)) }
+            }
+            .hidden()
+            .frame(height: 0)
+            content()
+        }
+    }
+}
+
+extension ChartAxes where Volume == EmptyView {
+    /// 没有成交量的图（分时）
+    init(high: Double, low: Double, start: String, end: String, @ViewBuilder chart: () -> Chart) {
+        self.init(high: high, low: low, start: start, end: end, volumeMax: nil, chart: chart) { EmptyView() }
+    }
+}
+
+/// 蜡烛图：一次显示最近 60 根，左右拖动翻看更早的；右侧标出可见区间的最高、最低价，下方是成交量和首尾日期
 struct CandleChart: View {
     let candles: [Candle]
     let period: KPeriod
@@ -221,52 +301,53 @@ struct CandleChart: View {
     var body: some View {
         let shown = candles[(candles.count - count - offset)..<(candles.count - offset)]
         if let high = shown.map(\.high).max(), let low = shown.map(\.low).min(), high > low {
-            VStack(spacing: 4) {
-                HStack(spacing: 6) {
-                    Canvas { context, size in
-                        let step = size.width / CGFloat(shown.count)
-                        func y(_ price: Double) -> CGFloat { size.height * (1 - (price - low) / (high - low)) }
-                        for (i, candle) in shown.enumerated() {
-                            let x = (CGFloat(i) + 0.5) * step
-                            let color = candle.close >= candle.open ? rising : falling
-                            var wick = Path()
-                            wick.move(to: CGPoint(x: x, y: y(candle.high)))
-                            wick.addLine(to: CGPoint(x: x, y: y(candle.low)))
-                            context.stroke(wick, with: .color(color), lineWidth: 1)
-                            let top = y(max(candle.open, candle.close)), bottom = y(min(candle.open, candle.close))
-                            let body = CGRect(x: x - step * 0.35, y: top, width: step * 0.7, height: max(bottom - top, 1))
-                            context.fill(Path(body), with: .color(color))
-                        }
-                    }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-                    .contentShape(.rect)
-                    // 向右拖看更早的，松手停在那里
-                    .gesture(DragGesture(minimumDistance: 2)
-                        .onChanged { value in
-                            let total = Int((value.translation.width / (width / CGFloat(count))).rounded())
-                            offset = min(max(offset + total - applied, 0), candles.count - count)
-                            applied = total
-                        }
-                        .onEnded { _ in applied = 0 })
-                    VStack(alignment: .trailing) {
-                        Text(Format.price(high))
-                        Spacer()
-                        Text(Format.price(low))
+            // 没有成交量的数据源（全为 0）不画副图
+            let volumeMax = shown.map(\.volume).max().flatMap { $0 > 0 ? $0 : nil }
+            ChartAxes(high: high, low: low, start: label(shown[shown.startIndex].time), end: label(shown[shown.endIndex - 1].time),
+                      volumeMax: volumeMax) {
+                Canvas { context, size in
+                    let step = size.width / CGFloat(shown.count)
+                    func y(_ price: Double) -> CGFloat { size.height * (1 - (price - low) / (high - low)) }
+                    for (i, candle) in shown.enumerated() {
+                        let x = (CGFloat(i) + 0.5) * step
+                        let color = color(candle)
+                        var wick = Path()
+                        wick.move(to: CGPoint(x: x, y: y(candle.high)))
+                        wick.addLine(to: CGPoint(x: x, y: y(candle.low)))
+                        context.stroke(wick, with: .color(color), lineWidth: 1)
+                        let top = y(max(candle.open, candle.close)), bottom = y(min(candle.open, candle.close))
+                        let body = CGRect(x: x - step * 0.35, y: top, width: step * 0.7, height: max(bottom - top, 1))
+                        context.fill(Path(body), with: .color(color))
                     }
                 }
-                HStack {
-                    Text(label(shown[shown.startIndex].time))
-                    Spacer()
-                    Text(label(shown[shown.endIndex - 1].time))
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            } volume: {
+                // 和上面的蜡烛逐根对齐，颜色同涨跌，调淡一些
+                Canvas { context, size in
+                    guard let volumeMax else { return }
+                    let step = size.width / CGFloat(shown.count)
+                    for (i, candle) in shown.enumerated() where candle.volume > 0 {
+                        let height = max(size.height * candle.volume / volumeMax, 1)
+                        let bar = CGRect(x: (CGFloat(i) + 0.15) * step, y: size.height - height, width: step * 0.7, height: height)
+                        context.fill(Path(bar), with: .color(color(candle).opacity(0.6)))
+                    }
                 }
-                .padding(.trailing, 40)
             }
-            .font(.system(size: 10).monospacedDigit())
-            .foregroundStyle(.secondary)
+            .contentShape(.rect)
+            // 向右拖看更早的，松手停在那里；在蜡烛和成交量上拖都可以
+            .gesture(DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    let total = Int((value.translation.width / (width / CGFloat(count))).rounded())
+                    offset = min(max(offset + total - applied, 0), candles.count - count)
+                    applied = total
+                }
+                .onEnded { _ in applied = 0 })
         } else {
             ChartPlaceholder()
         }
     }
+
+    private func color(_ candle: Candle) -> Color { candle.close >= candle.open ? rising : falling }
 
     /// 日 K 约三个月，标月日；周 K、月 K 跨年，标年月；年 K 只标年
     private func label(_ time: Date) -> String {

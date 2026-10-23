@@ -1,6 +1,6 @@
 import Foundation
 
-/// Binance 现货公开行情，无需 API Key：WebSocket 推送 24 小时滚动价格，5 分钟 K 线画分时
+/// Binance 现货公开行情，无需 API Key：WebSocket 推送 24 小时滚动行情，5 分钟 K 线画分时
 final class Binance {
     var onQuote: (String, Quote) -> Void = { _, _ in }
     var onLive: (Bool) -> Void = { _ in }
@@ -31,7 +31,7 @@ final class Binance {
                         guard case .string(let text) = message,
                               let data = try? JSONDecoder().decode(JSON.self, from: Data(text.utf8))["data"],
                               let symbol = data["s"]?.string.flatMap({ byWire[$0] }),
-                              let quote = Quote(last: data["c"]?.double, open: data["o"]?.double, time: data["E"]?.date)
+                              let quote = Quote(miniTicker: data)
                         else { continue }
                         guard !Task.isCancelled else { return }   // 已切换订阅，旧连接的消息不再回调
                         self?.live = true

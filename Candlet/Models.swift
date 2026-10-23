@@ -158,6 +158,15 @@ nonisolated enum Market: Sendable {
         }
     }
 
+    /// 常规时段的开盘、收盘时间（交易所当地时间），标在详情页分时图下方；加密货币全天交易，没有
+    var session: (open: String, close: String)? {
+        switch self {
+        case .us, .hk: ("09:30", "16:00")
+        case .sh, .sz: ("09:30", "15:00")
+        case .crypto: nil
+        }
+    }
+
     /// 交易所时区的公历，免费行情按它解析时间、合并年 K；Binance 按 UTC 划分
     var calendar: Calendar {
         switch self {
@@ -236,6 +245,8 @@ nonisolated struct Quote: Sendable, Equatable {
     var extended: Extended?
     /// 数据来源，显示在详情页右上角：长桥、腾讯、新浪、Yahoo、Binance
     var source: String
+    /// 加密货币的 24 小时滚动开高低量，和涨跌幅同一口径；股票为 nil，详情页改取当天日 K
+    var rolling: Candle?
 
     enum Session: Sendable {
         case pre, post, overnight
@@ -289,10 +300,13 @@ nonisolated struct Quote: Sendable, Equatable {
         (self.last, self.prevClose, self.time, extended, self.source) = (last, prevClose, time, nil, source)
     }
 
-    /// 加密货币：相对 24 小时前的开盘价
-    init?(last: Double?, open: Double?, time: Date?) {
-        guard let last, let open, let time else { return nil }
+    /// 加密货币：Binance miniTicker 推送，涨跌相对 24 小时前的开盘价
+    init?(miniTicker j: JSON) {
+        guard let last = j["c"]?.double, let open = j["o"]?.double, let time = j["E"]?.date else { return nil }
         self.init(last: last, prevClose: open, time: time, source: "Binance")
+        if let high = j["h"]?.double, let low = j["l"]?.double {
+            rolling = Candle(time: time, open: open, high: high, low: low, close: last, volume: j["v"]?.double ?? 0)
+        }
     }
 
     init?(snapshot j: JSON) {
@@ -365,7 +379,7 @@ nonisolated enum KPeriod: String, CaseIterable, Sendable {
     }
 }
 
-nonisolated struct Candle: Sendable {
+nonisolated struct Candle: Sendable, Equatable {
     var time: Date
     var open, high, low, close, volume: Double
 

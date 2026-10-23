@@ -1,49 +1,78 @@
 import AppKit
 import Security
 
-/// 通过 GitHub 最新 Release 检查更新：启动时和之后每天查一次（菜单栏 App 很少重启），也可以在 ⋯ 菜单里手动检查。
-/// 有 DMG 时在 App 内下载安装，装不了就退回浏览器下载
+/// 通过 GitHub 最新 Release 检查更新：打开面板时检查（菜单栏 App 很少重启，按打开面板算比按启动算及时），也可以在 ⋯ 菜单里手动检查。
+/// 有 DMG 时在 App 内下载安装，装不了就说明原因，由用户决定是否改用浏览器下载
 @Observable
 final class Updater {
+    /// GitHub 上的一个新版本：page 是 Release 页面（更新内容），dmg 是安装包
+    struct Release: Equatable {
+        let version: String
+        let page: URL
+        let dmg: URL?
+    }
+
     enum State: Equatable {
         case checking, upToDate, failed
-        case available(version: String, url: URL)
-        case installing(version: String)
+        case available(Release)
+        case installing(Release)
     }
 
     private(set) var state = State.checking
     let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
 
-    private static let latest = URL(string: "https://api.github.com/repos/tonyski/Candlet/releases/latest")!
+    @ObservationIgnored private var checkTask: Task<Void, Never>?
+    @ObservationIgnored private var lastChecked = Date.distantPast
 
-    init() {
-        Task {
-            while true {
-                check()
-                try? await Task.sleep(for: .seconds(24 * 3600))
-            }
-        }
+    private static let latest = URL(string: "https://api.github.com/repos/tonyski/Candlet/releases/latest")!
+    /// 自动检查的间隔；上次失败（比如开机时还没联网）则下次打开面板立即重查
+    private static let interval: TimeInterval = 6 * 3600
+
+    func panelOpened() {
+        if case .failed = state { return check() }
+        if Date.now.timeIntervalSince(lastChecked) > Self.interval { check() }
     }
 
     /// 检查期间菜单项不可点，不会重复发起；安装中不打断
     func check() {
+        guard checkTask == nil else { return }
         if case .installing = state { return }
         state = .checking
-        Task { state = await Self.fetch(current: current) }
+        checkTask = Task {
+            state = await Self.fetch(current: current)
+            if state != .failed { lastChecked = .now }
+            checkTask = nil
+        }
     }
 
-    /// 下载、校验签名、替换当前 App 后重启。没有 DMG、所在目录不可写（如从 DMG 里直接运行）、签名不符等情况，改用浏览器下载
+    /// 下载、校验签名、替换当前 App 后重启。没有 DMG 时直接打开 Release 页面；
+    /// 所在目录不可写（如从 DMG 里直接运行）、下载失败、签名不符时说明原因，可以改用浏览器下载
     func install() {
-        guard case .available(let version, let url) = state else { return }
-        state = .installing(version: version)
+        guard case .available(let release) = state else { return }
+        guard let dmg = release.dmg else {
+            NSWorkspace.shared.open(release.page)
+            return
+        }
+        state = .installing(release)
         Task {
             do {
-                Self.relaunch(try await Self.replace(Bundle.main.bundleURL, with: url))
+                Self.relaunch(try await Self.replace(Bundle.main.bundleURL, with: dmg))
             } catch {
-                state = .available(version: version, url: url)
-                NSWorkspace.shared.open(url)
+                state = .available(release)
+                Self.explain(error, release)
             }
         }
+    }
+
+    /// 菜单栏面板里的 SwiftUI 弹窗不可靠，和删除分组一样用系统提醒框
+    private static func explain(_ error: any Error, _ release: Release) {
+        let alert = NSAlert()
+        alert.messageText = "无法自动更新到 \(release.version)"
+        alert.informativeText = error.localizedDescription + "\n\n可以在浏览器中下载安装包，拖进「应用程序」替换旧版。"
+        alert.addButton(withTitle: "在浏览器中下载")
+        alert.addButton(withTitle: "取消")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(release.dmg ?? release.page) }
     }
 
     private static func fetch(current: String) async -> State {
@@ -54,12 +83,11 @@ final class Updater {
 
         let version = tag.trimmingPrefix("v")
         guard version.compare(current, options: .numeric) == .orderedDescending else { return .upToDate }
-        // 有 DMG 附件就直接下载，否则打开 Release 页面
         let dmg = release["assets"]?.list()
             .compactMap { $0["browser_download_url"]?.string }
             .first { $0.hasSuffix(".dmg") }
             .flatMap(URL.init(string:))
-        return .available(version: String(version), url: dmg ?? page)
+        return .available(Release(version: String(version), page: page, dmg: dmg))
     }
 
     // MARK: - 安装
@@ -68,8 +96,8 @@ final class Updater {
     @concurrent
     private static func replace(_ target: URL, with dmg: URL) async throws -> URL {
         let files = FileManager.default
-        guard dmg.pathExtension == "dmg", files.isWritableFile(atPath: target.deletingLastPathComponent().path) else {
-            throw AppError("无法就地更新")
+        guard files.isWritableFile(atPath: target.deletingLastPathComponent().path) else {
+            throw AppError("Candlet 所在的文件夹不可写，比如正直接从安装包里运行。")
         }
         let (download, _) = try await URLSession.shared.download(from: dmg)
         let work = try files.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: target, create: true)
@@ -78,7 +106,11 @@ final class Updater {
         let staged = work.appending(path: "Candlet.app"), old = work.appending(path: "old.app")
         try files.moveItem(at: download, to: image)
 
-        try await run("/usr/bin/hdiutil", "attach", image.path, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.path)
+        do {
+            try await run("/usr/bin/hdiutil", "attach", image.path, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.path)
+        } catch {
+            throw AppError("安装包无法打开，可能下载不完整。")
+        }
         let copied = Result { try files.copyItem(at: mount.appending(path: "Candlet.app"), to: staged) }
         try? await run("/usr/bin/hdiutil", "detach", mount.path, "-force")
         try copied.get()
@@ -101,7 +133,7 @@ final class Updater {
               SecCodeCopyDesignatedRequirement(own, [], &requirement) == errSecSuccess, let requirement,
               SecStaticCodeCreateWithPath(app as CFURL, [], &update) == errSecSuccess, let update,
               SecStaticCodeCheckValidity(update, flags, requirement) == errSecSuccess
-        else { throw AppError("新版签名校验失败") }
+        else { throw AppError("新版的签名与当前版本不符，为安全起见没有安装。") }
     }
 
     private nonisolated static func run(_ tool: String, _ arguments: String...) async throws {

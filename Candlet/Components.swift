@@ -177,10 +177,17 @@ struct Sparkline: View {
     let baseline: Double?
     let color: Color
 
+    /// 图的纵轴范围：价格连同昨收；不到两个点或是一条平线时为 nil，不画
+    static func range(_ points: [SparkPoint], baseline: Double?) -> ClosedRange<Double>? {
+        let values = points.map(\.price) + [baseline].compactMap { $0 }
+        guard points.count > 1, let low = values.min(), let high = values.max(), high > low else { return nil }
+        return low...high
+    }
+
     var body: some View {
         let prices = points.map(\.price)
-        let range = prices + [baseline].compactMap { $0 }
-        if prices.count > 1, let low = range.min(), let high = range.max(), high > low {
+        if let range = Self.range(points, baseline: baseline) {
+            let (low, high) = (range.lowerBound, range.upperBound)
             Canvas { context, size in
                 let inset: CGFloat = 1   // 留出线宽，避免最高最低点被裁掉
                 func y(_ price: Double) -> CGFloat {
