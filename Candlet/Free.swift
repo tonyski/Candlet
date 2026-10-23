@@ -1,22 +1,20 @@
 import Foundation
 
-/// 免费行情：腾讯（A 股、港股，美股搜索）+ 新浪（美股报价，含盘前盘后）+ Yahoo（美股分时、K 线，新加坡），
+/// 免费行情：腾讯（A 股、港股，美股搜索）+ 新浪（美股报价，含盘前盘后）+ Yahoo（美股分时、K 线），
 /// 都是非官方的公开接口，无需登录。没有推送，由 Store 在面板打开时轮询；没连接长桥或长桥不可用时使用
 enum Free {
     struct Snapshot {
         let quote: Quote
         let marketCap: Double?
-        /// Yahoo 的报价自带当天分时，新加坡股不必再单独拉
-        var sparks: [SparkPoint]? = nil
     }
 
-    /// 腾讯、新浪各一次请求取回所有支持的股票；新加坡股逐只问 Yahoo
+    /// 腾讯、新浪各一次请求取回所有支持的股票
     static func quotes(_ symbols: Set<String>) async -> [String: Snapshot] {
-        async let us = sina(symbols.filter { $0.hasSuffix(".US") })
+        async let us = sina(symbols.filter { Market($0) == .us })
         var found: [String: Snapshot] = [:]
         // 港股要带 r_ 前缀，不带的是 15 分钟延迟行情
         let byWire = Dictionary(symbols.compactMap { symbol in
-            tencent(symbol).map { (symbol.hasSuffix(".HK") ? "r_" + $0 : $0, symbol) }
+            tencent(symbol).map { (Market(symbol) == .hk ? "r_" + $0 : $0, symbol) }
         }) { first, _ in first }
         if !byWire.isEmpty, let url = URL(string: "https://qt.gtimg.cn/q=" + byWire.keys.sorted().joined(separator: ",")),
            let (data, _) = try? await URLSession.shared.data(from: url) {
@@ -28,24 +26,20 @@ enum Free {
                                          marketCap: Double(f[45]).map { $0 * 1e8 })   // 总市值，单位亿
             }
         }
-        for symbol in symbols where symbol.hasSuffix(".SG") {
-            if let snapshot = await yahoo(symbol) { found[symbol] = snapshot }
-        }
         return found.merging(await us) { $1 }
     }
 
-    /// 当天的分时：A 股、港股用腾讯，美股、新加坡股用 Yahoo
+    /// 当天的分时：A 股、港股用腾讯，美股用 Yahoo
     static func sparks(_ symbol: String) async -> [SparkPoint] {
-        guard let wire = tencent(symbol) else { return await yahoo(symbol)?.sparks ?? [] }
+        guard let wire = tencent(symbol) else { return await yahooSparks(symbol) }
         // web.ifzq.gtimg.cn 的分时接口会被腾讯防火墙拦截，换用 ifzq.gtimg.cn
-        guard let url = URL(string: "https://ifzq.gtimg.cn/appstock/app/minute/query?code=\(wire)"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let day = (try? JSONDecoder().decode(JSON.self, from: data))?["data"]?[wire]?["data"] else { return [] }
+        guard let day = await JSON.fetch(URL(string: "https://ifzq.gtimg.cn/appstock/app/minute/query?code=\(wire)"))?["data"]?[wire]?["data"]
+        else { return [] }
         // 每个点形如 "0930 412.000 566848 …"；没给日期时按交易所当天算。
         // A 股还带 15:00 后的盘后固定价格交易，和长桥一样只画常规时段
         let calendar = calendar(for: symbol)
         let date = day["date"]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? today(in: calendar)
-        let close = symbol.hasSuffix(".HK") ? "9999" : "1500"
+        let close = Market(symbol) == .hk ? "9999" : "1500"
         return day["data"]?.list().compactMap { item in
             let f = item.string?.split(separator: " ") ?? []
             guard f.count > 1, f[0] <= close, let price = Double(f[1]),
@@ -54,14 +48,13 @@ enum Free {
         } ?? []
     }
 
-    /// 详情页的日、周、月、年 K 线：A 股、港股用腾讯，美股、新加坡股用 Yahoo
+    /// 详情页的日、周、月、年 K 线：A 股、港股用腾讯，美股用 Yahoo
     static func candles(_ symbol: String, _ period: KPeriod) async -> [Candle] {
         guard let wire = tencent(symbol) else { return await yahooCandles(symbol, period) }
         // 腾讯的年 K 只有当年一根，改取月 K 按年合并
         let fetched = period == .year ? KPeriod.month : period
-        guard let url = URL(string: "https://ifzq.gtimg.cn/appstock/app/fqkline/get?param=\(wire),\(fetched.rawValue),,,\(Candle.loadCount),"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let series = (try? JSONDecoder().decode(JSON.self, from: data))?["data"]?[wire] else { return [] }
+        let url = URL(string: "https://ifzq.gtimg.cn/appstock/app/fqkline/get?param=\(wire),\(fetched.rawValue),,,\(Candle.loadCount),")
+        guard let series = await JSON.fetch(url)?["data"]?[wire] else { return [] }
         // 每根形如 ["2026-10-21", 开, 收, 高, 低, 量]。和长桥一样不复权：前复权后分红多的股票早年价格接近 0 甚至为负，年 K 画不出来
         let calendar = calendar(for: symbol)
         let bars = series[fetched.rawValue]?.list().compactMap { bar -> Candle? in
@@ -72,13 +65,8 @@ enum Free {
         return period == .year ? bars.yearly(in: calendar) : bars
     }
 
-    /// 按代码、名称或拼音搜 A 股、港股、美股（含 ETF），新加坡股另问 Yahoo；没有长桥的证券目录时使用
+    /// 按代码、名称或拼音搜 A 股、港股、美股（含 ETF）；没有长桥的证券目录时使用
     static func search(_ query: String) async -> [Stock] {
-        async let singapore = yahooSearch(query)
-        return await tencentSearch(query) + singapore
-    }
-
-    private static func tencentSearch(_ query: String) async -> [Stock] {
         var components = URLComponents(string: "https://smartbox.gtimg.cn/s3/")!
         components.queryItems = [.init(name: "v", value: "2"), .init(name: "q", value: query), .init(name: "t", value: "all")]
         guard let url = components.url, let (data, _) = try? await URLSession.shared.data(from: url) else { return [] }
@@ -103,22 +91,6 @@ enum Free {
         }
     }
 
-    /// 新加坡股票和 ETF：D05.SI → D05.SG
-    private static func yahooSearch(_ query: String) async -> [Stock] {
-        var components = URLComponents(string: "https://query2.finance.yahoo.com/v1/finance/search")!
-        components.queryItems = [.init(name: "q", value: query), .init(name: "quotesCount", value: "10"), .init(name: "newsCount", value: "0")]
-        guard let url = components.url else { return [] }
-        var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let quotes = (try? JSONDecoder().decode(JSON.self, from: data))?["quotes"] else { return [] }
-        return quotes.list().compactMap { item in
-            guard let symbol = item["symbol"]?.string, symbol.hasSuffix(".SI"),
-                  ["EQUITY", "ETF"].contains(item["quoteType"]?.string) else { return nil }
-            return Stock(symbol: String(symbol.dropLast(3)) + ".SG", name: item["shortname"]?.string ?? item["longname"]?.string ?? symbol)
-        }
-    }
-
     // MARK: - 内部
 
     /// 美股：常规时段和盘前盘后一起返回。AAPL.US → gb_aapl，BRK.B.US → gb_brk$b；不带 Referer 会被拒
@@ -136,7 +108,7 @@ enum Free {
             if let price = Double(f[21]), price > 0, let extTime = sinaDate(f[24]), extTime > time {
                 // 新浪不分盘前盘后，按美东时间上午、下午区分；没有夜盘。
                 // 盘前盘后价带 4 位小数（712.7933），1 美元以上按美股报价习惯取到分
-                let session: Quote.Session = calendar(for: symbol).component(.hour, from: extTime) < 12 ? .pre : .post
+                let session: Quote.Session = Calendar.newYork.component(.hour, from: extTime) < 12 ? .pre : .post
                 let cents = price >= 1 ? (price * 100).rounded() / 100 : price
                 quote.extended = .init(session: session, last: cents, prevClose: last, time: extTime)
             }
@@ -159,7 +131,7 @@ enum Free {
     /// "Oct 21 07:59PM EDT" 不带年份：先按今年算，落到明天以后就是去年的
     private static func sinaDate(_ text: Substring) -> Date? {
         guard let parsed = sinaFormatter.date(from: String(text.dropLast(4))) else { return nil }
-        let calendar = calendar(for: ".US")
+        let calendar = Calendar.newYork
         var components = calendar.dateComponents([.month, .day, .hour, .minute], from: parsed)
         components.year = calendar.component(.year, from: .now)
         guard let date = calendar.date(from: components) else { return nil }
@@ -175,40 +147,35 @@ enum Free {
     }()
 
     /// 700.HK → hk00700，600519.SH → sh600519。腾讯只用于 A 股、港股：
-    /// 美股收盘后分时只剩一个点、K 线要带交易所后缀，改用新浪和 Yahoo；新加坡股腾讯没有
+    /// 美股收盘后分时只剩一个点、K 线要带交易所后缀，改用新浪和 Yahoo
     private static func tencent(_ symbol: String) -> String? {
-        guard let dot = symbol.lastIndex(of: ".") else { return nil }
-        let code = symbol[..<dot]
-        return switch symbol[symbol.index(after: dot)...] {
-        case "HK": "hk" + String(repeating: "0", count: max(0, 5 - code.count)) + code
-        case "SH": "sh" + code
-        case "SZ": "sz" + code
+        let code = symbol.prefix { $0 != "." }
+        return switch Market(symbol) {
+        case .hk: "hk" + String(repeating: "0", count: max(0, 5 - code.count)) + code
+        case .sh: "sh" + code
+        case .sz: "sz" + code
         default: nil
         }
     }
 
-    /// Yahoo 图表接口：D05.SG → D05.SI，BRK.B.US → BRK-B；不带浏览器 UA 会被拒
+    /// Yahoo 图表接口：BRK.B.US → BRK-B
     private static func yahooChart(_ symbol: String, interval: String, range: String) async -> JSON? {
-        let code = symbol.hasSuffix(".SG") ? symbol.dropLast(3) + ".SI" : symbol.dropLast(3).replacing(".", with: "-")
-        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(code)?interval=\(interval)&range=\(range)") else { return nil }
-        var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
-        return (try? JSONDecoder().decode(JSON.self, from: data))?["chart"]?["result"]?.list().first
+        let code = symbol.dropLast(3).replacing(".", with: "-")
+        let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(code)?interval=\(interval)&range=\(range)")
+        return await JSON.fetch(url, headers: yahooHeaders)?["chart"]?["result"]?.list().first
     }
 
-    /// 一次返回报价和当天分时：新加坡股的报价和分时、美股的分时
-    private static func yahoo(_ symbol: String) async -> Snapshot? {
-        guard let result = await yahooChart(symbol, interval: "1m", range: "1d"),
-              let meta = result["meta"], let last = meta["regularMarketPrice"]?.double,
-              let prev = meta["chartPreviousClose"]?.double ?? meta["previousClose"]?.double,
-              let time = meta["regularMarketTime"]?.date else { return nil }
+    /// Yahoo 不带浏览器 UA 会被拒
+    private static let yahooHeaders = ["User-Agent": "Mozilla/5.0"]
+
+    /// 美股当天的 1 分钟分时
+    private static func yahooSparks(_ symbol: String) async -> [SparkPoint] {
+        guard let result = await yahooChart(symbol, interval: "1m", range: "1d") else { return [] }
         let times = result["timestamp"]?.list() ?? []
         let closes = result["indicators"]?["quote"]?.list().first?["close"]?.list() ?? []
-        let points = zip(times, closes).compactMap { time, close in   // 没成交的分钟是 null
+        return zip(times, closes).compactMap { time, close in   // 没成交的分钟是 null
             time.date.flatMap { t in close.double.map { SparkPoint(time: t, price: $0) } }
         }
-        return Snapshot(quote: Quote(last: last, prevClose: prev, time: time, source: "Yahoo"), marketCap: nil, sparks: points)
     }
 
     /// Yahoo 按时间范围取，日、周 K 约 250 根，月 K 约 120 根；没有年 K，取 50 年的月 K 按年合并
@@ -244,12 +211,8 @@ enum Free {
         return period == .year ? bars.yearly(in: calendar) : bars
     }
 
-    /// 按交易所时区解析时间：美股纽约，港股香港，其余上海
-    private static func calendar(for symbol: String) -> Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: symbol.hasSuffix(".US") ? "America/New_York" : symbol.hasSuffix(".HK") ? "Asia/Hong_Kong" : "Asia/Shanghai")!
-        return calendar
-    }
+    /// 按交易所时区解析时间
+    private static func calendar(for symbol: String) -> Calendar { Market(symbol)?.calendar ?? .shanghai }
 
     /// "2026/10/21 16:08:21"、"2026-10-20 16:00:01"、"20261021161453" 都取出 14 位数字再解析
     private static func date(_ text: String, in calendar: Calendar) -> Date? {

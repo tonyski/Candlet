@@ -6,10 +6,6 @@ nonisolated struct AppError: LocalizedError {
     init(_ message: String) { errorDescription = message }
 }
 
-nonisolated struct RPCError: LocalizedError {
-    let errorDescription: String?
-}
-
 /// 子进程断开。挂起的请求和退出事件拿到的是同一个值，谁先到都不影响判断
 nonisolated struct Disconnected: LocalizedError {
     let errorDescription: String?
@@ -117,7 +113,7 @@ actor Serve {
         if let id = msg["id"]?.int {
             guard let continuation = pending.removeValue(forKey: id) else { return }
             if let error = msg["error"] {
-                continuation.resume(throwing: RPCError(errorDescription: error["message"]?.string))
+                continuation.resume(throwing: AppError(error["message"]?.string ?? "请求失败"))
             } else {
                 continuation.resume(returning: msg["result"] ?? .null)
             }

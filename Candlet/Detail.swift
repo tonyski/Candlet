@@ -38,7 +38,8 @@ struct StockDetail: View {
         // 先加载正在看的图；当日开高低和成交量取最新一根日 K，所以日 K 总要加载。
         // 每次打开详情都重新拉；没拉到（比如长桥还在连接）的，切换标签时再试
         .task(id: period) {
-            for item in [period ?? .day, .day] where candles[item]?.isEmpty ?? true {
+            let viewed = period ?? .day
+            for item in viewed == .day ? [.day] : [viewed, .day] where candles[item]?.isEmpty ?? true {
                 candles[item] = await store.candles(stock.symbol, item)
             }
         }
@@ -80,7 +81,7 @@ struct StockDetail: View {
     private var price: some View {
         HStack(alignment: .lastTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(StockRow.price(quote?.last))
+                Text(Format.price(quote?.last))
                     .font(.system(size: 22, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
@@ -94,10 +95,10 @@ struct StockDetail: View {
             if let extended = quote?.latestExtended {
                 VStack(alignment: .trailing, spacing: 2) {
                     // 只到分钟：新浪的盘前盘后时间本来就没有秒
-                    Text("\(extended.session.name) \(StockRow.time(extended.time, seconds: false))")
+                    Text("\(extended.session.name) \(Format.time(extended.time, seconds: false))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(StockRow.price(extended.last))
+                    Text(Format.price(extended.last))
                         .font(.system(size: 14, weight: .semibold))
                     change(extended.last - extended.prevClose, extended.change)
                         .font(.system(size: 11, weight: .medium))
@@ -105,7 +106,7 @@ struct StockDetail: View {
                 }
                 .lineLimit(1)
             } else if let time = quote?.time, time > .distantPast {
-                Text(StockRow.updated(time))
+                Text(Format.updated(time))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -117,7 +118,7 @@ struct StockDetail: View {
     private func change(_ amount: Double, _ percent: Double) -> some View {
         HStack(spacing: 8) {
             Text(amount.formatted(.number.precision(.fractionLength(2...3)).sign(strategy: .always())))
-            Text(StockRow.percent(percent))
+            Text(Format.percent(percent))
         }
     }
 
@@ -128,22 +129,19 @@ struct StockDetail: View {
                 CandleChart(candles: bars, period: period, rising: rising, falling: falling)
                     .id(period)   // 切换周期时回到最新
             } else {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+                ChartPlaceholder(loading: true)
             }
         } else if let points = store.sparks[stock.symbol], points.count > 1 {
-            Sparkline(points: points, slots: stock.sparkSlots, baseline: quote?.prevClose, color: tint)
+            Sparkline(points: points, slots: stock.market?.sparkSlots ?? 0, baseline: quote?.prevClose, color: tint)
         } else if !sparksWaited {
-            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            ChartPlaceholder(loading: true)
                 .task {
                     // 切到 K 线时任务被取消，sleep 提前返回，这时不算等过
                     guard (try? await Task.sleep(for: .seconds(5))) != nil else { return }
                     sparksWaited = true
                 }
         } else {
-            Text("暂无数据")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ChartPlaceholder()
         }
     }
 
@@ -154,13 +152,13 @@ struct StockDetail: View {
         let amplitude = today.flatMap { t in prevClose.flatMap { $0 > 0 ? (t.high - t.low) / $0 : nil } }
         return Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
             GridRow {
-                stat("今开", StockRow.price(today?.open))
-                stat("最高", StockRow.price(today?.high))
-                stat("最低", StockRow.price(today?.low))
+                stat("今开", Format.price(today?.open))
+                stat("最高", Format.price(today?.high))
+                stat("最低", Format.price(today?.low))
             }
             GridRow {
-                stat(stock.isCrypto ? "24 小时前" : "昨收", StockRow.price(prevClose))
-                stat("成交量", today.map { Badge.compact($0.volume) } ?? "--")
+                stat(stock.isCrypto ? "24 小时前" : "昨收", Format.price(prevClose))
+                stat("成交量", today.map { Format.compact($0.volume) } ?? "--")
                 stat("振幅", amplitude.map { $0.formatted(.percent.precision(.fractionLength(2))) } ?? "--")
             }
         }
@@ -184,6 +182,24 @@ struct StockDetail: View {
 
     private func color(_ change: Double) -> Color {
         change == 0 ? .primary : change > 0 ? rising : falling
+    }
+}
+
+/// 图表区的占位：加载中转圈，否则「暂无数据」
+struct ChartPlaceholder: View {
+    var loading = false
+
+    var body: some View {
+        Group {
+            if loading {
+                ProgressView().controlSize(.small)
+            } else {
+                Text("暂无数据")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -233,9 +249,9 @@ struct CandleChart: View {
                         }
                         .onEnded { _ in applied = 0 })
                     VStack(alignment: .trailing) {
-                        Text(StockRow.price(high))
+                        Text(Format.price(high))
                         Spacer()
-                        Text(StockRow.price(low))
+                        Text(Format.price(low))
                     }
                 }
                 HStack {
@@ -248,10 +264,7 @@ struct CandleChart: View {
             .font(.system(size: 10).monospacedDigit())
             .foregroundStyle(.secondary)
         } else {
-            Text("暂无数据")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ChartPlaceholder()
         }
     }
 

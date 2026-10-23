@@ -61,10 +61,9 @@ final class Store {
     @ObservationIgnored private var lastRefresh = Date.distantPast
     /// 免费行情没有推送，只在面板打开期间轮询
     @ObservationIgnored private var panelVisible = false
-    /// 免费行情的上一轮刷新、整天分时重拉、新加坡报价的时间。lastFree 清零（切到免费行情时）就全部重拉
+    /// 免费行情的上一轮刷新、整天分时重拉的时间。lastFree 清零（切到免费行情时）就全部重拉
     @ObservationIgnored private var lastFree = Date.distantPast
     @ObservationIgnored private var lastFreeSparks = Date.distantPast
-    @ObservationIgnored private var lastSingapore = Date.distantPast
     /// 同一时间只跑一轮免费刷新
     @ObservationIgnored private var freeTask: Task<Void, Never>?
     /// 最近一轮免费行情是否取到了；nil 表示还没取过，或数据已经旧了（刚切过来、面板关了一阵）
@@ -130,7 +129,7 @@ final class Store {
         groups = updated
     }
 
-    /// Binance USDT 交易对随时可加载；A 股、港股、美股、新加坡证券列表要等长桥连上，连上后自动补上。失败的部分下次再试
+    /// Binance USDT 交易对随时可加载；A 股、港股、美股证券列表要等长桥连上，连上后自动补上。失败的部分下次再试
     func loadCatalog() {
         catalogWanted = true
         if cryptoCatalog.isEmpty, cryptoCatalogTask == nil {
@@ -143,7 +142,7 @@ final class Store {
             stockCatalogTask = Task {
                 defer { stockCatalogTask = nil }
                 var entries: [SearchEntry] = []
-                for market in ["CN", "HK", "US", "SG"] {
+                for market in ["CN", "HK", "US"] {
                     guard let list = try? await serve.call("quote.security_list", ["market": .string(market)]) else { return }
                     entries += list.list().compactMap { item in
                         // 5 位港股代码是窝轮、牛熊证和人民币 / 美元柜台，搜索里用不到
@@ -347,10 +346,15 @@ final class Store {
             if !removed.isEmpty {
                 _ = try? await serve.call("quote.unsubscribe", ["symbols": .strings(removed)])
                 subscribed.subtract(removed)
-                for symbol in removed { quotes[symbol] = nil; sparks[symbol] = nil }
+                removed.forEach(forget)
             }
             try? await subscribe(wanted.subtracting(subscribed))
         }
+    }
+
+    /// 移出自选的，行情、分时和股本一起清掉
+    private func forget(_ symbol: String) {
+        (quotes[symbol], sparks[symbol], shares[symbol]) = (nil, nil, nil)
     }
 
     private func subscribe(_ symbols: Set<String>) async throws {
@@ -360,7 +364,8 @@ final class Store {
         // 订阅结果里自带一份快照；拿不到时用 quote.quote 补
         let snapshots = result.list("quotes")
         if snapshots.isEmpty { await refresh(symbols) } else { store(snapshots) }
-        await loadSparks(symbols)
+        // 分时和股本互不依赖，一起拉
+        async let sparksLoaded: Void = loadSparks(symbols)
         if let info = try? await serve.call("quote.static_info", ["symbols": .strings(symbols)]) {
             for item in info.list("secu_static_info") {
                 if let symbol = item["symbol"]?.string, let total = item["total_shares"]?.double, total > 0 {
@@ -368,6 +373,7 @@ final class Store {
                 }
             }
         }
+        await sparksLoaded
     }
 
     /// 重新拉快照和分时：跨日、跨时段后昨收和分时线都要换
@@ -464,28 +470,25 @@ final class Store {
         }
     }
 
-    /// 报价每 10 秒拉一次；新加坡股本来就延迟，每分钟一次。
+    /// 报价每 10 秒拉一次。
     /// 分时由报价接到末尾，只在首次、面板关过一阵后重新打开、以及每 10 分钟整天重拉校正
     private func refreshFree(_ symbols: Set<String>) async {
         guard !symbols.isEmpty else { return }
         let now = Date.now
         let reload = now.timeIntervalSince(lastFree) > 60 || now.timeIntervalSince(lastFreeSparks) > 600
-        let singapore = reload || now.timeIntervalSince(lastSingapore) > 60 || symbols.contains { $0.hasSuffix(".SG") && quotes[$0] == nil }
-        let asked = singapore ? symbols : symbols.filter { !$0.hasSuffix(".SG") }
-        let found = await Free.quotes(asked)
+        let found = await Free.quotes(symbols)
         guard usingFree else { return }   // 期间连上了长桥，别用免费数据覆盖
-        (lastFree, lastSingapore) = (now, singapore ? now : lastSingapore)
+        lastFree = now
         if reload { lastFreeSparks = now }
-        if !asked.isEmpty { freeLive = !found.isEmpty }
-        // 新加坡股的分时随报价一起来；其余整天重拉的，报价就不必再接到末尾。
+        freeLive = !found.isEmpty
+        // 整天重拉分时的，报价就不必再接到末尾。
         // 价格没变不接：收盘后腾讯的报价时间还在走，接上去会多出一段平线
-        let wanted = symbols.filter { !$0.hasSuffix(".SG") && (reload || sparks[$0] == nil) }
+        let wanted = symbols.filter { reload || sparks[$0] == nil }
         for (symbol, snapshot) in found {
             let moved = quotes[symbol]?.last != snapshot.quote.last
             quotes[symbol] = snapshot.quote
             if let cap = snapshot.marketCap { shares[symbol] = cap / snapshot.quote.last }
-            if let points = snapshot.sparks, !points.isEmpty { sparks[symbol] = points }
-            else if moved, !wanted.contains(symbol) { appendSpark(symbol, snapshot.quote) }
+            if moved, !wanted.contains(symbol) { appendSpark(symbol, snapshot.quote) }
         }
         await withTaskGroup { group in
             for symbol in wanted { group.addTask { (symbol, await Free.sparks(symbol)) } }
@@ -500,15 +503,15 @@ final class Store {
         let wanted = cryptoSymbols
         let previous = binance.symbols
         binance.watch(wanted)
-        for symbol in previous.subtracting(wanted) { quotes[symbol] = nil; sparks[symbol] = nil }
+        previous.subtracting(wanted).forEach(forget)
         let added = wanted.subtracting(previous)
         if !added.isEmpty { Task { await loadCryptoSparks(added) } }
     }
 
     private func loadCryptoSparks(_ symbols: Set<String>) async {
-        for symbol in symbols {
-            let points = await Binance.sparks(symbol)
-            if !points.isEmpty { sparks[symbol] = points }
+        await withTaskGroup { group in
+            for symbol in symbols { group.addTask { (symbol, await Binance.sparks(symbol)) } }
+            for await (symbol, points) in group where !points.isEmpty { sparks[symbol] = points }
         }
     }
 
@@ -520,7 +523,7 @@ final class Store {
             points[points.count - 1].price = quote.last
         } else {
             points.append(SparkPoint(time: quote.time, price: quote.last))
-            points.removeFirst(max(0, points.count - Stock.cryptoSlots))
+            points.removeFirst(max(0, points.count - Market.cryptoSlots))
         }
         sparks[symbol] = points
     }

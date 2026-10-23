@@ -75,6 +75,18 @@ nonisolated extension JSON: ExpressibleByStringLiteral, ExpressibleByArrayLitera
     init(dictionaryLiteral elements: (String, JSON)...) { self = .object(.init(uniqueKeysWithValues: elements)) }
 }
 
+nonisolated extension JSON {
+    /// GET 一个 JSON 接口，在后台解码；网络或格式出错时返回 nil
+    @concurrent
+    static func fetch(_ url: URL?, headers: [String: String] = [:]) async -> JSON? {
+        guard let url else { return nil }
+        var request = URLRequest(url: url)
+        for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        return try? JSONDecoder().decode(JSON.self, from: data)
+    }
+}
+
 // MARK: - 自选
 
 nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
@@ -91,32 +103,45 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
     var isCrypto: Bool { Self.isCrypto(symbol) }
     static func isCrypto(_ symbol: String) -> Bool { symbol.contains("/") }
 
-    /// 市场后缀：HK / US / SH / SZ / SG
-    private var suffix: Substring? { symbol.split(separator: ".").last }
+    var market: Market? { Market(symbol) }
 
-    var market: String? {
-        if isCrypto { return "加密" }
-        return switch suffix {
-        case "HK": "港股"
-        case "US": "美股"
-        case "SH": "沪市"
-        case "SZ": "深市"
-        case "SG": "新加坡"
-        default: nil
+    /// 名称下面那行：700 · 港股
+    var subtitle: String { [code, market?.name].compactMap { $0 }.joined(separator: " · ") }
+}
+
+/// 市场由代码后缀决定（700.HK / AAPL.US / 600660.SH / 000001.SZ），加密货币是交易对（BTC/USDT）。
+/// 各市场的差异都集中在这里
+nonisolated enum Market: Sendable {
+    case hk, us, sh, sz, crypto
+
+    init?(_ symbol: String) {
+        if Stock.isCrypto(symbol) { self = .crypto; return }
+        switch symbol.split(separator: ".").last {
+        case "HK": self = .hk
+        case "US": self = .us
+        case "SH": self = .sh
+        case "SZ": self = .sz
+        default: return nil
         }
     }
 
-    /// 名称下面那行：700 · 港股
-    var subtitle: String { [code, market].compactMap { $0 }.joined(separator: " · ") }
+    var name: String {
+        switch self {
+        case .hk: "港股"
+        case .us: "美股"
+        case .sh: "沪市"
+        case .sz: "深市"
+        case .crypto: "加密"
+        }
+    }
 
     /// 市值的币种符号；加密货币没有市值
     var currency: String? {
-        switch suffix {
-        case "HK": "HK$"
-        case "US": "$"
-        case "SH", "SZ": "¥"
-        case "SG": "S$"
-        default: nil
+        switch self {
+        case .hk: "HK$"
+        case .us: "$"
+        case .sh, .sz: "¥"
+        case .crypto: nil
         }
     }
 
@@ -125,12 +150,21 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
 
     /// 分时图横轴的总点数：股票为常规时段每天的分钟数（每分钟一个点，不含午休）
     var sparkSlots: Int {
-        if isCrypto { return Self.cryptoSlots }
-        return switch suffix {
-        case "US": 390     // 9:30–16:00
-        case "HK": 330     // 9:30–12:00, 13:00–16:00
-        case "SG": 420     // 9:00–12:00, 13:00–17:00
-        default: 240       // A 股 9:30–11:30, 13:00–15:00
+        switch self {
+        case .us: 390       // 9:30–16:00
+        case .hk: 330       // 9:30–12:00, 13:00–16:00
+        case .sh, .sz: 240  // 9:30–11:30, 13:00–15:00
+        case .crypto: Self.cryptoSlots
+        }
+    }
+
+    /// 交易所时区的公历，免费行情按它解析时间、合并年 K；Binance 按 UTC 划分
+    var calendar: Calendar {
+        switch self {
+        case .us: .newYork
+        case .hk: .hongKong
+        case .sh, .sz: .shanghai
+        case .crypto: .utc
         }
     }
 }
@@ -239,10 +273,13 @@ nonisolated struct Quote: Sendable, Equatable {
         var last: Double
         var prevClose: Double
         var time: Date
-        var change: Double { prevClose == 0 ? 0 : last / prevClose - 1 }
+        var change: Double { Quote.change(from: prevClose, to: last) }
     }
 
-    var change: Double { prevClose == 0 ? 0 : last / prevClose - 1 }
+    var change: Double { Self.change(from: prevClose, to: last) }
+
+    /// 涨跌幅；没有参照价时算作 0
+    static func change(from prevClose: Double, to last: Double) -> Double { prevClose == 0 ? 0 : last / prevClose - 1 }
 
     /// 比常规时段更新的延长时段成交，用于第二行显示
     var latestExtended: Extended? { extended.flatMap { $0.time > time ? $0 : nil } }
@@ -303,11 +340,16 @@ nonisolated struct SparkPoint: Equatable, Sendable {
 
 nonisolated extension Calendar {
     /// 公历 + UTC：Binance 的 K 线按 UTC 划分，分时跨日也按 UTC 判断
-    static let utc: Calendar = {
+    static let utc = gregorian(.gmt)
+    static let newYork = gregorian(TimeZone(identifier: "America/New_York")!)
+    static let hongKong = gregorian(TimeZone(identifier: "Asia/Hong_Kong")!)
+    static let shanghai = gregorian(TimeZone(identifier: "Asia/Shanghai")!)
+
+    private static func gregorian(_ timeZone: TimeZone) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .gmt
+        calendar.timeZone = timeZone
         return calendar
-    }()
+    }
 }
 
 nonisolated enum KPeriod: String, CaseIterable, Sendable {

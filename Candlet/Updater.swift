@@ -47,8 +47,7 @@ final class Updater {
     }
 
     private static func fetch(current: String) async -> State {
-        guard let (data, _) = try? await URLSession.shared.data(from: latest),
-              let release = try? JSONDecoder().decode(JSON.self, from: data),
+        guard let release = await JSON.fetch(latest),
               let tag = release["tag_name"]?.string,
               let page = release["html_url"]?.string.flatMap(URL.init(string:))
         else { return .failed }

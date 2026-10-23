@@ -1,6 +1,6 @@
 # Candlet
 
-macOS 菜单栏自选股，支持 A 股、港股、美股、新加坡股和加密货币。打开就能用，无需账户；有长桥账户可以改用长桥行情。
+macOS 菜单栏自选股，支持 A 股、港股、美股和加密货币。打开就能用，无需账户；有长桥账户可以改用长桥行情。
 
 ## 功能
 
@@ -34,11 +34,10 @@ macOS 菜单栏自选股，支持 A 股、港股、美股、新加坡股和加�
 | --- | --- | --- |
 | A 股、港股 | 实时（腾讯） | 实时推送 |
 | 美股 | 含盘前盘后（新浪） | 实时推送，含夜盘 |
-| 新加坡股 | 有延迟（Yahoo） | 实时推送 |
 
 加密货币始终来自 [Binance](https://developers.binance.com/docs/binance-spot-api-docs)，实时推送。
 
-免费行情来自非官方接口，可能失效，只在面板打开时刷新：每 10 秒一次，新加坡股每分钟一次。
+免费行情来自非官方接口，可能失效，只在面板打开时刷新：每 10 秒一次。
 
 **使用长桥行情**：在 ⋯ 菜单里打开「使用长桥行情」，再点「在浏览器中登录」完成授权。需要已开通 OpenAPI 的[长桥](https://open.longbridge.com)账户；美股实时行情还需购买「LV1 实时行情（OpenAPI）」。长桥断开或登录失效时，自动退回免费行情。App 已内置[长桥 CLI](https://github.com/longbridge/longbridge-terminal)，只在使用长桥行情时启动。
 
@@ -62,8 +61,9 @@ macOS 菜单栏自选股，支持 A 股、港股、美股、新加坡股和加�
 | `Serve.swift` | 内置 CLI 的子进程与 JSON-RPC |
 | `Binance.swift` | 加密货币行情 |
 | `Free.swift` | 免费行情（腾讯、新浪、Yahoo） |
-| `Models.swift` | 数据模型 |
+| `Models.swift` | 数据模型、市场 |
 | `Views.swift` | 自选列表界面 |
+| `Components.swift` | 列表行、分时小图、数字格式 |
 | `Detail.swift` | 详情页与 K 线图 |
 | `Updater.swift` | 检查、下载并安装新版本 |
 | `LoginItem.swift` | 登录时打开 |

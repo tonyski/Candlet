@@ -49,7 +49,7 @@ final class Binance {
 
     /// 最近 24 小时的 5 分钟 K 线收盘价
     static func sparks(_ symbol: String) async -> [SparkPoint] {
-        await klines(symbol, interval: "5m", limit: Stock.cryptoSlots).map { SparkPoint(time: $0.time, price: $0.close) }
+        await klines(symbol, interval: "5m", limit: Market.cryptoSlots).map { SparkPoint(time: $0.time, price: $0.close) }
     }
 
     /// 详情页的日、周、月、年 K 线；Binance 没有年 K，用月 K 按年（UTC）合并
@@ -65,9 +65,8 @@ final class Binance {
 
     /// 每根形如 [开盘时间, 开, 高, 低, 收, 量, …]
     private static func klines(_ symbol: String, interval: String, limit: Int) async -> [Candle] {
-        guard let url = URL(string: rest + "klines?symbol=\(wire(symbol))&interval=\(interval)&limit=\(limit)"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              case .array(let bars)? = try? JSONDecoder().decode(JSON.self, from: data) else { return [] }
+        guard case .array(let bars)? = await JSON.fetch(URL(string: rest + "klines?symbol=\(wire(symbol))&interval=\(interval)&limit=\(limit)"))
+        else { return [] }
         return bars.compactMap { bar in
             guard case .array(let k) = bar, k.count > 5, let time = k[0].date, let open = k[1].double,
                   let high = k[2].double, let low = k[3].double, let close = k[4].double else { return nil }
@@ -77,9 +76,7 @@ final class Binance {
 
     /// 所有 USDT 交易对，供搜索建议使用
     static func usdtPairs() async -> [SearchEntry] {
-        guard let url = URL(string: rest + "ticker/price"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              case .array(let tickers)? = try? JSONDecoder().decode(JSON.self, from: data) else { return [] }
+        guard case .array(let tickers)? = await JSON.fetch(URL(string: rest + "ticker/price")) else { return [] }
         return tickers.compactMap { ticker in
             guard let wire = ticker["symbol"]?.string, wire.hasSuffix("USDT"), wire.count > 4 else { return nil }
             let base = String(wire.dropLast(4))
