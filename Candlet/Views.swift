@@ -345,9 +345,9 @@ struct WatchlistView: View {
                 submitted = false
                 if let stock = suggestions.first(where: { $0.symbol == text }) { add(stock) }
             }
-            .task(id: "\(input)|\(store.catalogSize)|\(groupID)") {
+            .task(id: "\(input)|\(store.catalogSize)") {
                 let query = input
-                let found = await store.suggestions(for: query, in: group.id)
+                let found = await store.suggestions(for: query)
                 guard !Task.isCancelled else { return }
                 (suggestions, suggestionsFor) = (found, query)
                 if submitted { addFirstSuggestion() }
@@ -376,13 +376,14 @@ struct WatchlistView: View {
                 .focused($focused)
                 .onExitCommand(perform: closeAddField)
                 .onSubmit(addFirstSuggestion)
-                // 系统补全菜单：选中后代码会填进输入框，这时直接添加
+                // 系统补全菜单：选中后代码会填进输入框，这时直接添加；已在当前分组的不会重复添加
                 .textInputSuggestions {
+                    let owned = Set(group.stocks.map(\.symbol))
                     ForEach(suggestions, id: \.symbol) { stock in
                         HStack {
                             Text(stock.name)
                             Spacer()
-                            Text(stock.subtitle)
+                            Text(owned.contains(stock.symbol) ? "已添加 · \(stock.subtitle)" : stock.subtitle)
                                 .foregroundStyle(.secondary)
                         }
                         .textInputCompletion(stock.symbol)
@@ -453,8 +454,10 @@ struct WatchlistView: View {
         let others = store.groups.filter { $0.id != group.id }
         if !others.isEmpty {
             Menu("移到") {
+                // 目标分组已有这只时，移过去只是从这里拿掉；标出来，免得看着像删了
                 ForEach(others) { target in
-                    Button(target.name) { store.move(stock, from: group.id, to: target.id) }
+                    let owned = target.stocks.contains { $0.symbol == stock.symbol }
+                    Button(owned ? "\(target.name)（已在此分组）" : target.name) { store.move(stock, from: group.id, to: target.id) }
                 }
             }
         }

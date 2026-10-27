@@ -95,7 +95,7 @@ enum Free {
 
     /// 美股：常规时段和盘前盘后一起返回。AAPL.US → gb_aapl，BRK.B.US → gb_brk$b；不带 Referer 会被拒
     private static func sina(_ symbols: Set<String>) async -> [String: Snapshot] {
-        let byWire = Dictionary(symbols.map { ("gb_" + $0.dropLast(3).lowercased().replacing(".", with: "$"), $0) }) { first, _ in first }
+        let byWire = Dictionary(symbols.map { ("gb_" + Stock.code($0).lowercased().replacing(".", with: "$"), $0) }) { first, _ in first }
         guard !byWire.isEmpty, let url = URL(string: "https://hq.sinajs.cn/list=" + byWire.keys.sorted().joined(separator: ",")) else { return [:] }
         var request = URLRequest(url: url)
         request.setValue("https://finance.sina.com.cn", forHTTPHeaderField: "Referer")
@@ -149,7 +149,7 @@ enum Free {
     /// 700.HK → hk00700，600519.SH → sh600519。腾讯只用于 A 股、港股：
     /// 美股收盘后分时只剩一个点、K 线要带交易所后缀，改用新浪和 Yahoo
     private static func tencent(_ symbol: String) -> String? {
-        let code = symbol.prefix { $0 != "." }
+        let code = Stock.code(symbol)
         return switch Market(symbol) {
         case .hk: "hk" + String(repeating: "0", count: max(0, 5 - code.count)) + code
         case .sh: "sh" + code
@@ -160,7 +160,7 @@ enum Free {
 
     /// Yahoo 图表接口：BRK.B.US → BRK-B
     private static func yahooChart(_ symbol: String, interval: String, range: String) async -> JSON? {
-        let code = symbol.dropLast(3).replacing(".", with: "-")
+        let code = Stock.code(symbol).replacing(".", with: "-")
         let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(code)?interval=\(interval)&range=\(range)")
         return await JSON.fetch(url, headers: yahooHeaders)?["chart"]?["result"]?.list().first
     }

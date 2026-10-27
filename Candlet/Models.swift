@@ -98,7 +98,9 @@ nonisolated struct Stock: Identifiable, Equatable, Codable, Sendable {
 
     var displayName: String { alias ?? name }
 
-    var code: String { String(symbol[..<(symbol.lastIndex(of: ".") ?? symbol.endIndex)]) }
+    var code: String { Self.code(symbol) }
+    /// 去掉市场后缀：700.HK → 700，BRK.B.US → BRK.B
+    static func code(_ symbol: String) -> String { String(symbol[..<(symbol.lastIndex(of: ".") ?? symbol.endIndex)]) }
 
     var isCrypto: Bool { Self.isCrypto(symbol) }
     static func isCrypto(_ symbol: String) -> Bool { symbol.contains("/") }

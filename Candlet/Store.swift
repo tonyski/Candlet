@@ -156,32 +156,33 @@ final class Store {
         }
     }
 
-    /// 搜索建议，排除已在自选里的；在后台线程计算
-    func suggestions(for input: String, in group: StockGroup.ID) async -> [Stock] {
+    /// 搜索建议，已在自选里的也照常列出，由界面标注；在后台线程计算
+    func suggestions(for input: String) async -> [Stock] {
         let query = input.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty else { return [] }
-        let owned = Set(groups.first { $0.id == group }?.stocks.map(\.symbol) ?? [])
-        let local = catalogSize > 0 ? await Self.rank([stockCatalog, cryptoCatalog], query: query, excluding: owned) : []
+        let local = await Self.rank([stockCatalog, cryptoCatalog], query: query)
         guard !stocksSearchable else { return local }
         // 没有长桥的证券目录时，股票改用腾讯在线搜索；停顿一下再查，连续输入时不每个字都发请求
         try? await Task.sleep(for: .milliseconds(250))
         guard !Task.isCancelled else { return [] }
-        let remote = await Free.search(query).filter { !owned.contains($0.symbol) }
-        return Array((remote + local).prefix(6))
+        let remote = await Free.search(query)
+        return Array((remote + local).prefix(Self.suggestionLimit))
     }
+
+    private nonisolated static let suggestionLimit = 6
 
     /// 同档内名称、代码短者优先，衍生品自然靠后；只保留前几条，不全量排序
     @concurrent
-    private static func rank(_ catalogs: [[SearchEntry]], query: String, excluding owned: Set<String>, limit: Int = 6) async -> [Stock] {
+    private static func rank(_ catalogs: [[SearchEntry]], query: String) async -> [Stock] {
         let matcher = SearchEntry.Query(query)
         var best: [(rank: (Int, Int, Int), stock: Stock)] = []
         for (index, entry) in catalogs.joined().enumerated() {
             if index % 2000 == 0, Task.isCancelled { return [] }   // 继续输入时放弃这一轮
-            guard let score = entry.score(matcher), !owned.contains(entry.stock.symbol) else { continue }
+            guard let score = entry.score(matcher) else { continue }
             let rank = (score, entry.stock.name.utf8.count, entry.stock.symbol.utf8.count)
-            guard best.count < limit || rank < best[best.count - 1].rank else { continue }
+            guard best.count < suggestionLimit || rank < best[best.count - 1].rank else { continue }
             best.insert((rank, entry.stock), at: best.firstIndex { rank < $0.rank } ?? best.endIndex)
-            if best.count > limit { best.removeLast() }
+            if best.count > suggestionLimit { best.removeLast() }
         }
         return best.map(\.stock)
     }
@@ -280,7 +281,7 @@ final class Store {
         lastRefresh = .now
         let (stocks, crypto) = (stockSymbols, cryptoSymbols)
         Task {
-            await loadCryptoSparks(crypto)
+            await fetchSparks(crypto, Binance.sparks)
             if status == .live { await reload(stocks) }
         }
     }
@@ -418,20 +419,21 @@ final class Store {
     }
 
     private func loadSparks(_ symbols: Set<String>) async {
+        await fetchSparks(symbols) { [serve] symbol in
+            let result = try? await serve.call("quote.intraday", ["symbol": .string(symbol)])
+            return result?.list("lines").compactMap { line -> SparkPoint? in
+                guard let price = line["price"]?.double, let time = line["timestamp"]?.date else { return nil }
+                return SparkPoint(time: time, price: price)
+            } ?? []
+        }
+    }
+
+    /// 各只并发拉分时，拉到的才替换；valid 返回 false 时丢弃（期间换了数据源）
+    private func fetchSparks(_ symbols: Set<String>, while valid: () -> Bool = { true },
+                             _ fetch: @escaping @Sendable (String) async -> [SparkPoint]) async {
         await withTaskGroup { group in
-            for symbol in symbols {
-                group.addTask { [serve] in
-                    let result = try? await serve.call("quote.intraday", ["symbol": .string(symbol)])
-                    return (symbol, result)
-                }
-            }
-            for await (symbol, result) in group {
-                let points = result?.list("lines").compactMap { line -> SparkPoint? in
-                    guard let price = line["price"]?.double, let time = line["timestamp"]?.date else { return nil }
-                    return SparkPoint(time: time, price: price)
-                } ?? []
-                if !points.isEmpty { sparks[symbol] = points }
-            }
+            for symbol in symbols { group.addTask { (symbol, await fetch(symbol)) } }
+            for await (symbol, points) in group where valid() && !points.isEmpty { sparks[symbol] = points }
         }
     }
 
@@ -490,10 +492,7 @@ final class Store {
             if let cap = snapshot.marketCap { shares[symbol] = cap / snapshot.quote.last }
             if moved, !wanted.contains(symbol) { appendSpark(symbol, snapshot.quote) }
         }
-        await withTaskGroup { group in
-            for symbol in wanted { group.addTask { (symbol, await Free.sparks(symbol)) } }
-            for await (symbol, points) in group where usingFree && !points.isEmpty { sparks[symbol] = points }
-        }
+        await fetchSparks(wanted, while: { usingFree }, Free.sparks)
     }
 
     // MARK: - 加密货币
@@ -505,14 +504,7 @@ final class Store {
         binance.watch(wanted)
         previous.subtracting(wanted).forEach(forget)
         let added = wanted.subtracting(previous)
-        if !added.isEmpty { Task { await loadCryptoSparks(added) } }
-    }
-
-    private func loadCryptoSparks(_ symbols: Set<String>) async {
-        await withTaskGroup { group in
-            for symbol in symbols { group.addTask { (symbol, await Binance.sparks(symbol)) } }
-            for await (symbol, points) in group where !points.isEmpty { sparks[symbol] = points }
-        }
+        if !added.isEmpty { Task { await fetchSparks(added, Binance.sparks) } }
     }
 
     /// 每秒一条 24 小时滚动价格：同一根 5 分钟 K 线内更新最后一个点，否则追加并只保留最近 24 小时
